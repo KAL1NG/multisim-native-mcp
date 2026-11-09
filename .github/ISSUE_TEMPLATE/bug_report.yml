@@ -1,0 +1,23 @@
+name: Bug report
+description: Report an installation, editing or analysis issue
+body:
+  - type: textarea
+    id: environment
+    attributes:
+      label: Runtime
+      description: Output from multisim-native-mcp doctor
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual result
+    validations:
+      required: true

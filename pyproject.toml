@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "multisim-native-mcp"
+version = "0.2.1"
+description = "Native Multisim circuit editing and analog analysis through Model Context Protocol"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = "FSFAP-no-warranty-disclaimer"
+license-files = ["LICENSE"]
+authors = [{name = "y-wi"}]
+keywords = ["multisim", "mcp", "electronics", "circuit", "automation"]
+classifiers = [
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
+dependencies = [
+  "mcp==2.3.0",
+  "cryptography==48.0.1",
+  "frida==17.23.3",
+  "Pillow==12.2.0",
+  "tomlkit>=0.13.3,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/y-wi/multisim-native-mcp"
+Repository = "https://github.com/y-wi/multisim-native-mcp"
+Issues = "https://github.com/y-wi/multisim-native-mcp/issues"
+
+[project.scripts]
+multisim-native-mcp = "multisim_native_mcp.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "build>=1.2,<2", "twine>=6,<7"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/multisim_native_mcp"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "examples", "docs", "scripts", "install.ps1", "pyproject.toml", "README.md", "README.zh-CN.md", "LICENSE", "CHANGELOG.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["native: integration with the installed Multisim runtime"]

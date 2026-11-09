@@ -1,0 +1,20 @@
+{
+  "version": "14.3.1500.0",
+  "modules": {
+    "multisim.exe": "d221374d571d42e211a1f39ccd8ab37d75cbdacb029e793c3f0c8b5c220738fd",
+    "DrwEngine.dll": "7ef55d340876277c6ddc4edaf8932904856bb8a92b9eb6ddcf0c30c385a45a54",
+    "Od101dll.dll": "f7b5dcddfba7f121b33eb5fac4d208d4b28b2fd57e5af4ea2d33cd330a6d525a",
+    "SCH_CAP.dll": "27aa3fe50399fe2e9c31abb19b8019abbbd604767f063caeac94a645c1a59cf7",
+    "Library.dll": "a8735f57a216780f62a37316849c5d32cf4706829026d519b7a5e8cf8456367c",
+    "CIRCEXP.dll": "867627cc3f80fc67e8e50f0b222d939a2aec144da349b93a586ac67764a29cd1",
+    "EwbBase.dll": "3d898cd1c87a82b700289683090cf575de9b3d159ca342caf092d12383518ad9",
+    "SchematicCapture.dll": "0deec60d5c20c6f195e57be13cb110b60014a30bd54d7bcf0bd59f718f4733e6",
+    "Database.dll": "d06f1ed71153ba036c8d254f2aa1066a14f6bc2040bc4860151da1245a55b877",
+    "LibraryAccess.dll": "1270453b8ed94fdbd4bb554493898bb036ea45dc989a99b5ac603ab270f7a68b",
+    "compedit.dll": "3388af3ba492306298379e12ed1cb80daf67dbbf18f3f4ea43fac9dc042e51c7",
+    "SHARUTIL.dll": "8810fb6aba0b3b8c88673e0fd50e40a93da0b32c470bf95bcf63dce02ae573cb",
+    "SpiceifsSch.dll": "4c06b2ff95ee5148dd8219056b12d0642f3dd02dc2f09ec9a67301f16a9c3b37",
+    "spiceifs.dll": "4971e47f05a7dfb8980216de21929f68733cfbf0f5da15817fdc5a5b6be7de8d",
+    "PREFS.dll": "02e2cbea3a676b256fa4a6bec49d98c7b4f0c88cd3caf80358ede4298714f784"
+  }
+}
