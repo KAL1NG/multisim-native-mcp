@@ -6,6 +6,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from functools import wraps
 import re
 from .service import EditorService
+from . import __version__
 
 host = EditorService()
 
@@ -18,18 +19,18 @@ def checked(function):
         except Exception as error:
             raise ToolError(str(error)) from error
     return execute
-server = MCPServer('multisim-native', version='0.2.1',
+server = MCPServer('multisim-native', version=__version__,
                    instructions='Edit native Multisim objects in isolated copies or explicitly attached existing windows. '
                    'Read exact pin names before wiring; save results before closing. '
                    'Undo, redo and netlist refresh can invalidate memory IDs; reread objects afterward. '
                    'Coordinates are native sheet units and may snap to grid. '
-                   'Native Multisim 14.3 schematic editing and analog analysis.')
+                   'Native Multisim schematic editing and analog analysis.')
 
 
 @server.tool()
 @checked
 def native_runtime_status() -> dict:
-    """Check installed DLL hashes and native backend compatibility without starting Multisim."""
+    """Read runtime availability and reference-profile hash diagnostics without starting Multisim."""
     return host.runtime_status()
 
 

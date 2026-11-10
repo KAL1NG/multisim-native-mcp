@@ -16,7 +16,7 @@
 | 项目 | 版本 |
 | --- | --- |
 | 操作系统 | Windows 10 / 11 |
-| NI Multisim | 14.3.1500.0 |
+| NI Multisim | Windows，32 位 |
 | Python | CPython 3.12，32 位；安装脚本自动配置 |
 | 通信方式 | STDIO |
 
@@ -25,7 +25,7 @@
 在 PowerShell 中运行：
 
 ```powershell
-irm https://raw.githubusercontent.com/y-wi/multisim-native-mcp/v0.2.1/install.ps1 | iex
+irm https://raw.githubusercontent.com/y-wi/multisim-native-mcp/v0.2.2/install.ps1 | iex
 ```
 
 重启 Codex，工具列表中会出现 `multisim_native`。
@@ -63,7 +63,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ### 使用 uv 安装
 
 ```powershell
-uv tool install --python cpython-3.12-windows-x86-none https://github.com/y-wi/multisim-native-mcp/releases/download/v0.2.1/multisim_native_mcp-0.2.1-py3-none-any.whl
+uv tool install --python cpython-3.12-windows-x86-none https://github.com/y-wi/multisim-native-mcp/releases/download/v0.2.2/multisim_native_mcp-0.2.2-py3-none-any.whl
 multisim-native-mcp doctor
 multisim-native-mcp configure
 ```
@@ -122,6 +122,8 @@ multisim-native-mcp configure
 | `CODEX_HOME` | Codex 配置目录 | `%USERPROFILE%\.codex` |
 
 运行 `multisim-native-mcp doctor` 检查 Python 位数、安装资源和 Multisim 模块。`configure` 保留其他 Codex 设置，更新已有配置时生成带时间戳的备份。
+
+模块哈希和参考版本用于诊断。启动、进程附着和安装就绪状态依据运行环境是否存在判断。
 
 ## 开发
 

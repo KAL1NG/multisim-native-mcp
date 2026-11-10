@@ -96,9 +96,15 @@ class NativeHost:
         checks = []
         for name, digest in manifest['modules'].items():
             path = INSTALL / name
-            actual = sha256(path) if path.is_file() else None
-            checks.append({'module': name, 'match': actual == digest})
-        return {'compatible': all(c['match'] for c in checks), 'tested_version': manifest['version'],
+            check = {'module': name, 'present': path.is_file(), 'match': False}
+            try:
+                check['match'] = sha256(path) == digest if check['present'] else False
+            except OSError as error:
+                check['error'] = str(error)
+            checks.append(check)
+        return {'available': (INSTALL / 'multisim.exe').is_file(),
+                'compatible': all(c['match'] for c in checks), 'profile_enforced': False,
+                'tested_version': manifest['version'],
                 'install': str(INSTALL), 'checks': checks, 'backend': 'private-native-cpp/frida',
                 'official_com': False, 'screenshot_or_mouse': False,
                 'running': bool(self.process and self.process.poll() is None),
@@ -123,9 +129,8 @@ class NativeHost:
             source = Path(source_path)
             if not source.is_absolute() or source.suffix.lower() != '.ms14' or not source.is_file():
                 raise ValueError('source_path must be an absolute path to an existing .ms14 file')
-            status = self.runtime_status()
-            if not status['compatible']:
-                raise RuntimeError('Installed native DLLs do not match the tested ABI profile; refusing to attach')
+            if not (INSTALL / 'multisim.exe').is_file():
+                raise FileNotFoundError('Multisim executable not found: ' + str(INSTALL / 'multisim.exe'))
             if any(p.name.lower() in ('multisim', 'multisim.exe') for p in frida.get_local_device().enumerate_processes()):
                 raise RuntimeError('Close other Multisim windows first. This build redirects new launches to an existing process; the service only operates its own isolated host.')
             self.close()

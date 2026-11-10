@@ -11,7 +11,7 @@ def test_installed_package_stdio(tmp_path):
             async with ClientSession(reader,writer,read_timeout_seconds=30) as session:
                 initialized=await session.initialize()
                 assert initialized.server_info.name == 'multisim-native'
-                assert initialized.server_info.version == '0.2.1'
+                assert initialized.server_info.version == '0.2.2'
                 listed=await session.list_tools();names={tool.name for tool in listed.tools}
                 assert len(names)==44
                 assert {'native_attach','native_split_wire','native_save_copy','native_read_waveform'} <= names

@@ -1,18 +1,34 @@
-import json,os
+import json,os,shutil
 from pathlib import Path
 import pytest
 import frida
 from multisim_native_mcp.bridge import sha256
 from multisim_native_mcp.paths import RESOURCE_DIR
 from multisim_native_mcp.service import EditorService
+from multisim_native_mcp import bridge,service
 
 pytestmark=pytest.mark.native
 
 
-def test_native_edit_save_reload_and_analog_analysis(tmp_path):
+@pytest.fixture
+def different_reference(tmp_path,monkeypatch):
+    resources=tmp_path/'reference';resources.mkdir()
+    for name in ['host_agent.js','editor_agent.js','startup_agent.js','native-profile.json']:
+        shutil.copy2(RESOURCE_DIR/name,resources/name)
+    (resources/'assets').mkdir()
+    shutil.copy2(RESOURCE_DIR/'assets/blank14.3.ms14',resources/'assets/blank14.3.ms14')
+    path=resources/'native-profile.json';profile=json.loads(path.read_text())
+    profile['version']='0.0.0';profile['modules']={name:'0'*64 for name in profile['modules']}
+    path.write_text(json.dumps(profile),encoding='utf-8')
+    monkeypatch.setattr(bridge,'ROOT',resources)
+    monkeypatch.setattr(service,'ROOT',resources)
+
+
+def test_native_edit_save_reload_and_analog_analysis(tmp_path,different_reference):
     host=EditorService()
     try:
-        assert host.runtime_status()['compatible']
+        status=host.runtime_status()
+        assert status['available'] and not status['compatible']
         host.create('Voltage divider')
         assert not host.call('components')['components']
         assert not host.call('wires')['wires']
@@ -53,7 +69,7 @@ def test_native_edit_save_reload_and_analog_analysis(tmp_path):
     finally:host.close()
 
 
-def test_attach_preserves_existing_process(tmp_path):
+def test_attach_preserves_existing_process(tmp_path,different_reference):
     owner=EditorService();client=EditorService()
     try:
         owner.create('Attach test')

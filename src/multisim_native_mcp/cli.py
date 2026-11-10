@@ -67,7 +67,7 @@ def doctor(install_path: str | None = None) -> dict:
             report["runtime"] = host.runtime_status()
         finally:
             host.close()
-    report["ready"] = bool(report["resources"] and report.get("runtime", {}).get("compatible"))
+    report["ready"] = bool(report["resources"] and report.get("runtime", {}).get("available"))
     return report
 
 

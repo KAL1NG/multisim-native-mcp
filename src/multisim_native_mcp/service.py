@@ -279,7 +279,6 @@ class EditorService(NativeHost):
     def attach(self,pid,project_index=0):
         with self.lock:
             if self.process and self.process.poll() is None: raise RuntimeError('Close or detach current native session first')
-            if not self.runtime_status()['compatible']: raise RuntimeError('Native ABI profile mismatch')
             found=next((p for p in frida.get_local_device().enumerate_processes() if p.pid==pid and p.name.lower() in ('multisim','multisim.exe')),None)
             if not found: raise ValueError('PID is not a running Multisim process')
             self.close();self.owned=False;self.process=ExistingProcess(pid)
@@ -287,14 +286,10 @@ class EditorService(NativeHost):
             self.working=folder/'attached-session.ms14';self.source=None;self.source_hash=None
             try:
                 self.session=frida.attach(pid)
-                profile=json.loads((ROOT/'native-profile.json').read_text(encoding='utf-8'))
-                # Validate paths and bytes of the actual loaded modules, not just the configured installation.
                 inspector=self.session.create_script('rpc.exports.modules=()=>Process.enumerateModules().map(m=>({name:m.name,path:m.path}));',runtime='v8')
                 inspector.load();modules={m['name'].lower():m['path'] for m in inspector.exports_sync.modules()};inspector.unload()
-                for name,digest in profile['modules'].items():
-                    actual=modules.get(name.lower())
-                    if actual and sha256(Path(actual))!=digest: raise RuntimeError('Attached module profile mismatch: '+name)
-                    if not actual and name.lower() in ('multisim.exe','drwengine.dll','sch_cap.dll','od101dll.dll'):
+                for name in ('multisim.exe','DrwEngine.dll','SCH_CAP.dll','Od101dll.dll'):
+                    if name.lower() not in modules:
                         raise RuntimeError('Attached process is not ready: '+name)
                 code=(ROOT/'host_agent.js').read_text(encoding='utf-8')+'\n'+(ROOT/'editor_agent.js').read_text(encoding='utf-8')
                 self.agent=self.session.create_script(code,runtime='v8');self.agent.on('message',self._message);self.agent.load()

@@ -16,7 +16,7 @@ Native circuit editing and analog analysis for NI Multisim through the Model Con
 | Component | Version |
 | --- | --- |
 | Operating system | Windows 10 / 11 |
-| NI Multisim | 14.3.1500.0 |
+| NI Multisim | Windows, 32-bit |
 | Python | CPython 3.12, 32-bit; installed automatically |
 | Transport | STDIO |
 
@@ -25,7 +25,7 @@ Native circuit editing and analog analysis for NI Multisim through the Model Con
 Run in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/y-wi/multisim-native-mcp/v0.2.1/install.ps1 | iex
+irm https://raw.githubusercontent.com/y-wi/multisim-native-mcp/v0.2.2/install.ps1 | iex
 ```
 
 Restart Codex. The server appears as `multisim_native`.
@@ -63,7 +63,7 @@ Add the resulting `mcpServers.multisim_native` entry to your client's MCP config
 ### Install with uv
 
 ```powershell
-uv tool install --python cpython-3.12-windows-x86-none https://github.com/y-wi/multisim-native-mcp/releases/download/v0.2.1/multisim_native_mcp-0.2.1-py3-none-any.whl
+uv tool install --python cpython-3.12-windows-x86-none https://github.com/y-wi/multisim-native-mcp/releases/download/v0.2.2/multisim_native_mcp-0.2.2-py3-none-any.whl
 multisim-native-mcp doctor
 multisim-native-mcp configure
 ```
@@ -122,6 +122,8 @@ Read component and wire IDs again after undo, redo or a netlist check that retur
 | `CODEX_HOME` | Codex configuration directory | `%USERPROFILE%\.codex` |
 
 Run `multisim-native-mcp doctor` to check the Python architecture, package resources and Multisim modules. `configure` preserves the other Codex settings and creates a timestamped backup when updating an existing configuration.
+
+Module hashes and the reference version are diagnostic information. Startup, process attachment and installation readiness use runtime availability.
 
 ## Development
 
