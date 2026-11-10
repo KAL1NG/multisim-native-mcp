@@ -22,8 +22,6 @@ Native circuit editing and analog analysis for NI Multisim through the Model Con
 
 Multisim 14.2 and 14.3 expose the same private native object model, and both are supported: component and wire editing, netlist generation, DC operating point and transient analysis, native `.ms14` save and image export work on either version. `native-profile.json` keeps the 14.3 module hashes as a diagnostic reference, so a 14.2 installation reports `compatible: false` while still running normally. An installation outside the default 14.3 directory is selected with `-MultisimPath` (see [Install](#install)).
 
-One 14.2 behaviour difference: the hidden host occasionally starts without loading its master component database, and library search or component placement then fails with `system error` for that session. Close the session and open the copy again; the new host normally loads the library.
-
 ## Install
 
 Run in PowerShell:
