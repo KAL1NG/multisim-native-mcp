@@ -68,7 +68,7 @@ function parameterInfo(args,source=null) {
   if(descriptor)for(const p of parameters){if(p.index===1)Object.assign(p,{name:descriptor[0],unit:descriptor[1],role:'value'});else if(p.index===0)p.role='model_option';}
   return {ref:c.ref,ci:ci.toString(),info,parameters};
 }
-function setParameter(args) {
+function setParameter(args,displayExpression=null) {
   const before=parameterInfo(args),c=component(args.ref),ci=ciObject(ptr(c.id));
   if(!before.parameters.some(p=>p.index===args.index))throw new Error('Parameter index does not exist');
   if(args.expression!==undefined) {
@@ -78,7 +78,7 @@ function setParameter(args) {
     if(!ok)throw new Error('Native expression setter rejected the value');
   } else {
     method('CIRCEXP.dll','?SetDoubleParam@CiElement@@','void',['pointer','double','int'])(ci,args.value,args.index);
-    const attr=method('CIRCEXP.dll','?GetAttribute@CiElement@@','pointer',['pointer','uint'])(ci,2),text=pathString(String(args.value));
+    const attr=method('CIRCEXP.dll','?GetAttribute@CiElement@@','pointer',['pointer','uint'])(ci,2),text=pathString(displayExpression??String(args.value));
     method('CIRCEXP.dll','?SetExprParam@CiaParamList@@','uint8',['pointer','int','pointer','int'])(attr,args.index,text,1);
     native('Library.dll','??1CPathString@@QAE@XZ','void',['pointer'])(text);
   }
@@ -411,7 +411,13 @@ function placeComponent(args) {
 }
 function generateRecord(record,args) {
   activateSheet();
-  if(args.ref && components().components.some(c=>c.ref===args.ref))throw new Error('Reference already exists on this sheet');
+  validatePlacement(args);
+  const requestedRef=args.ref;
+  const duplicate=args.ref && components().components.some(c=>c.ref===args.ref);
+  const powerDefault=/^(GROUND|VDD|VSS|VCC|VEE|GND)$/i.test(args.name||'') &&
+    (args.ref==='0'||args.ref?.toUpperCase()===args.name.toUpperCase());
+  if(duplicate&&!powerDefault)throw new Error('Reference already exists on this sheet');
+  if(duplicate)args={...args,ref:undefined};
   const d=diagram(),handler=method('SCH_CAP.dll','?GetComponentHandler@@','pointer',[],'mscdecl')(),name=pathString(''),out=Memory.alloc(4);out.writePointer(ptr(0));
   if(treeInstance().isNull())throw new Error('Selected sheet has no native tree instance');
   // The first two integer arguments are section index and place flag, NOT coordinates.
@@ -421,8 +427,15 @@ function generateRecord(record,args) {
   let c=component(object.toString());
   const others=components().components.filter(p=>p.id!==c.id),stem=(c.local_ref.match(/^[A-Za-z_]+/)||['X'])[0];let suffix=1;
   while(others.some(p=>p.ref===stem+suffix))suffix++;
-  const ref=args.ref||(!others.some(p=>p.ref===c.local_ref)?c.local_ref:stem+suffix);
+  // Global supply symbols deliberately share a canonical reference. Their
+  // object IDs, not a fabricated ref suffix, identify the placed instances.
+  const sharedPower=/^(VDD|VSS|VCC|VEE|GND)$/i.test(args.name||'');
+  const ref=args.ref||(sharedPower?c.ref:!others.some(p=>p.ref===c.local_ref)?c.local_ref:stem+suffix);
   if(c.ref!==ref)renameComponent({ref:c.id,new_ref:ref});
+  // Match standalone transform order, then resolve the final anchor.
+  if(args.angle!==undefined)transformComponent({ref:c.id,angle:args.angle});
+  if(args.mirror_axis!==undefined)transformComponent({ref:c.id,axis:args.mirror_axis});
+  c=component(c.id);
   const origin=matrix(object),anchor=args.anchor||'origin';
   let point={x:origin[4],y:origin[5]};
   if(anchor==='pin'){
@@ -432,16 +445,37 @@ function generateRecord(record,args) {
     const b=symbolBodyBounds(c);point={x:(b.left+b.right)/2,y:(b.top+b.bottom)/2};
   }
   method('Od101dll.dll','?MoveComponentBy@CODDiagram@@','void',['pointer','pointer','int','int'])(d.graph,object,Math.round(args.x-point.x),Math.round(args.y-point.y));
-  for(const parameter of args.parameters||[])setParameter({ref:c.id,...parameter});
+  const parameters=[...(args.parameters||[])];
+  if('value' in args||'expression' in args){
+    const slots=parameterInfo({ref:c.id}).parameters.filter(p=>p.role==='value');
+    if(slots.length!==1)throw new Error('Primary value slot is ambiguous; provide indexed parameters');
+    if(parameters.some(p=>p.index===slots[0].index))throw new Error('Primary value supplied twice');
+    const value=args.expression??args.value;
+    parameters.push({index:slots[0].index,[typeof value==='string'?'expression':'value']:value});
+  }
+  const primary=parameterInfo({ref:c.id}).parameters.filter(p=>p.role==='value').map(p=>p.index);
+  for(const parameter of parameters){
+    const display='value' in parameter&&primary.includes(parameter.index)?engineeringExpression(parameter.value):null;
+    setParameter({ref:c.id,...parameter},display);
+  }
   c=component(object.toString());
   const metadata=parameterInfo({ref:c.id});
   const body=symbolBodyBounds(c),actual=anchor==='pin'?c.pins.find(p=>p.name===args.pin):anchor==='center'?{x:(body.left+body.right)/2,y:(body.top+body.bottom)/2}:{x:c.transform[4],y:c.transform[5]};
   const placement={coordinate_system:'sheet_units',pin_offsets:c.pins.map(p=>({name:p.name,dx:p.x-actual.x,dy:p.y-actual.y})),anchor,...(anchor==='pin'?{pin:args.pin}:{}),requested:{x:args.x,y:args.y},actual:{x:actual.x,y:actual.y},origin:{x:c.transform[4],y:c.transform[5]},body_bounds:body};
   const page=pageGeometry(),offPage=body.left<0||body.top<0||body.right>page.width||body.bottom>page.height;
   const warnings=offPage?[{code:'outside_page',reference:c.ref,message:'Component is outside the page. Use fit_content or a region to include it in the exported image.'}]:[];
+  if(duplicate)warnings.push({code:'reference_auto_assigned',requested_ref:requestedRef,reference:c.ref,component_id:c.id,message:'Multisim assigned this power-symbol instance. Global supply references may be shared; use the unique component ID or a workflow binding.'});
   for(const p of metadata.parameters)if(p.role==='value'&&p.value===null&&!p.expression?.trim())warnings.push({code:'unset_value',reference:c.ref,index:p.index,name:p.name,message:'Set the primary component value before analysis.'});
   return {component:{...c,library:{family:metadata.info[0],name:metadata.info[1],symbol_family:metadata.info[2],model:metadata.info[3]},default_reference_prefix:stem},parameters:metadata.parameters,page,
-    placement,warnings};
+    placement,labels:componentLabels({ref:c.id}).labels,warnings};
+}
+function engineeringExpression(value){
+  if(value===0)return '0';
+  const prefixes={[-15]:'f',[-12]:'p',[-9]:'n',[-6]:'u',[-3]:'m',0:'',3:'k',6:'Meg',9:'G',12:'T'};
+  const exponent=Math.floor(Math.log10(Math.abs(value))/3)*3;
+  if(!(exponent in prefixes))return String(value);
+  // Avoid binary floating-point tails in displayed engineering values.
+  return String(Number((value/10**exponent).toPrecision(15)))+prefixes[exponent];
 }
 function allocateObject(className,constructor,args,types) {
   const type=method('Od101dll.dll','?GetThisClass@'+className+'@@','pointer',[],'stdcall')();
@@ -1236,7 +1270,8 @@ function componentBounds() {
     const graphic=method('Od101dll.dll','?GetGraphic@CODComponent@@QAEP','pointer',['pointer'])(ptr(c.id)),rect=Memory.alloc(16);
     method('Od101dll.dll','?GetBox@CODGraphic@@QAEXAAVCRect@@AAVCODInstContext@@@Z','void',['pointer','pointer','pointer'])(graphic,rect,context);
     const [x1,y1,x2,y2]=[0,4,8,12].map(n=>rect.add(n).readS32());
-    return {...c,bounds:{left:Math.min(x1,x2),top:Math.min(y1,y2),right:Math.max(x1,x2),bottom:Math.max(y1,y2)}};
+    return {...c,body_bounds:symbolBodyBounds(c),labels:componentLabels({ref:c.id},c).labels,
+      bounds:{left:Math.min(x1,x2),top:Math.min(y1,y2),right:Math.max(x1,x2),bottom:Math.max(y1,y2)}};
   })};
 }
 function contentBounds() {
@@ -1255,7 +1290,6 @@ function contentBounds() {
 }
 function circuitState(args={}) {
   const state=componentBounds(),page=pageGeometry();
-  for(const c of state.components)c.labels=componentLabels({ref:c.id},c).labels;
   if(args.include_parameters)for(const c of state.components){const p=parameterInfo({ref:c.id},c);c.parameters=p.parameters;c.library={family:p.info[0],name:p.info[1],symbol_family:p.info[2],model:p.info[3]};}
   return {sheets:readSheets(),page,components:state.components,wires:wires().wires,texts:textObjects(),content_bounds:contentBounds(),
     ...(args.include_persistence?persistenceSheetData(state):{})};
@@ -1373,6 +1407,13 @@ function sequenceValue(value,bindings){
     return [k,sequenceValue(v,bindings)];
   }));
 }
+function validatePlacement(a){
+  if('angle' in a&&!Number.isFinite(a.angle))throw new Error('Rotation must be finite');
+  if('mirror_axis' in a&&!['horizontal','vertical'].includes(a.mirror_axis))throw new Error('Invalid mirror axis');
+  if('value' in a&&'expression' in a)throw new Error('Provide value or expression, not both');
+  if('expression' in a&&(typeof a.expression!=='string'||!a.expression.trim()||a.expression.includes('\0')))throw new Error('Invalid expression');
+  if('value' in a&&!(typeof a.value==='string'&&a.value.trim()&&!a.value.includes('\0'))&&!Number.isFinite(a.value))throw new Error('Invalid placement value');
+}
 function validateSequenceOperation(op,a){
   if(op==='remove'){for(const [alias,key] of [['object_id','id'],['component_ref','ref']])if(alias in a){if(key in a&&a[key]!==a[alias])throw new Error('Conflicting '+alias+' and '+key);a[key]=a[alias];delete a[alias];}}
   const required={place:['name','x','y'],move:['ref','dx','dy'],alignPin:['ref','pin','x','y'],moveLabel:['ref','x','y'],transform:['ref'],
@@ -1385,6 +1426,7 @@ function validateSequenceOperation(op,a){
     if(k in a&&(typeof a[k]!=='string'||a[k].includes('\0')))throw new Error('Invalid '+k);
   for(const k of ['x','y','dx','dy','index','width','height'])if(k in a&&(!Number.isInteger(a[k])||a[k]<-2147483648||a[k]>2147483647))throw new Error('Invalid '+k);
   if(op==='place'&&!['origin','center','pin'].includes(a.anchor||'origin'))throw new Error('Invalid placement anchor');
+  if(op==='place')validatePlacement(a);
   if(op==='transform'&&(!(('angle' in a)||('axis' in a))||('angle' in a&&(!Number.isFinite(a.angle)))||('axis' in a&&!['horizontal','vertical'].includes(a.axis))))throw new Error('Invalid transform');
   if(op==='remove'&&!a.ref&&!a.id)throw new Error('remove requires ref or id');
   if(op==='updateText'&&!['text','x','y'].some(k=>k in a))throw new Error('updateText requires text, x or y');

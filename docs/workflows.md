@@ -16,9 +16,9 @@ Use the complete [12 V divider request](../skills/multisim-native/assets/workflo
 - `native_control_workflow`: cancel or explicitly resume an unfinished workflow, optionally replacing the remaining stages.
 - `native_session_changes`: obtain a revision and full/incremental state. Pass the revision as the plan's `expected_revision` to reject stale input.
 
-Use `bind` on an edit operation and `{"$ref":"lower.component.id"}` in dependent arguments. Every stage also binds its result to its `id`. References support earlier results, array indices and two-term `$add`/`$sub` numeric offsets. Placement `value` selects an unambiguous primary-value parameter; named-pin voltage selectors avoid guessing waveform node numbers. `alignPin` moves a selected native pin to a requested sheet coordinate.
+Use `bind` on an edit operation and `{"$ref":"lower.component.id"}` in dependent arguments. Every stage also binds its result to its `id`. References support earlier results, array indices and two-term `$add`/`$sub` numeric offsets. Placement `value` or `expression` selects an unambiguous primary-value parameter. Inline `angle` rotates clockwise, then `mirror_axis` mirrors, then the final anchor is positioned; named-pin voltage selectors avoid guessing waveform node numbers. `alignPin` moves a selected native pin to a requested sheet coordinate.
 
-编辑操作通过 `bind` 命名结果，后续参数用 `{"$ref":"lower.component.id"}` 引用。每个阶段也会以自己的 `id` 保存结果。支持前序结果、数组索引和两个数的 `$add`/`$sub` 运算。放置时的 `value` 自动选择唯一的主值参数；电压测量可指定元件及引脚，无需猜测波形节点编号。`alignPin` 可将指定原生引脚移动到目标图纸坐标。
+编辑操作通过 `bind` 命名结果，后续参数用 `{"$ref":"lower.component.id"}` 引用。每个阶段也会以自己的 `id` 保存结果。支持前序结果、数组索引和两个数的 `$add`/`$sub` 运算。放置时的 `value` 或 `expression` 自动选择唯一的主值参数；数值自动使用紧凑工程单位。内联 `angle` 按图纸顺时针旋转，随后应用 `mirror_axis` 镜像，再定位最终锚点；电压测量可指定元件及引脚，无需猜测波形节点编号。`alignPin` 可将指定原生引脚移动到目标图纸坐标。
 
 ## Results and recovery / 结果与恢复
 
@@ -43,3 +43,5 @@ Set `persist: true` on an `interactive` stage to write its steps and pacing into
 Version 0.5.1 provides `simulation_settings` (`scope`, `analysis_type`, `changes`, `solver_options`, `expected_revision`) and `sheet_display` (`show_grid`, `show_border`, `show_bounds`) stages. Analysis options accept `persist:true` or `use_saved_settings:true`. A save stage accepts `save_to_source:true` instead of `output_path`, with backup and native reopen verification by default (`verify:false` skips reopen verification). A wiring stage's `persist:true` commits application-wide preferences, separately from the circuit file. See [persistence ownership](persistence.md).
 
 Normal session open/create now uses actual workspace/source documents. Supply the required absolute output_path for new circuits. A save stage without output_path saves the current document; close also saves pending changes by default. Explicit comparisons alone use isolated_copy:true, with an explicit comparison output_path. Checkpoints and backups remain internal.
+
+An `open` session for the same currently selected direct-document path reuses its in-memory edits and handles, including after create/prepare. A different document or isolated comparison still requires closing the current session. Omit power-symbol refs and use placement bindings for multiple grounds or supply symbols.

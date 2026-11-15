@@ -14,6 +14,18 @@ For a component already present, call `native_get_parameters(component_ref)` and
 
 Here index 1 applies specifically to `RESISTOR_VIRTUAL`. Its index 0 is a model option, not resistance. Numeric values use the descriptor's unit; SPICE expressions such as `1k` can be supplied through `expression`.
 
+## Placement transforms and displayed values
+
+All placement entry points support `angle` (finite degrees), `mirror_axis` (`horizontal` reverses x, `vertical` reverses y), and either primary `value` or `expression`. The order is rotate, mirror, then translate to the selected `origin`, body `center`, or named `pin` anchor. Positive rotation is clockwise in sheet coordinates (x right, y down). For an LED with A above K, -90 degrees places A on the left; +90 places A on the right. Returned `pins`, `labels` and `placement.pin_offsets` describe the final symbol. Preparation states this convention, with offsets relative to its center anchor.
+
+```json
+{"name":"CAPACITOR_VIRTUAL","x":360,"y":180,"anchor":"pin","pin":"1","angle":90,"expression":"1u"}
+```
+
+Primary values require one unambiguous value descriptor. Explicit strings such as `1u`, `10n`, `68k` and `1Meg` are preserved. Numeric primary placement values use compact SPICE engineering expressions (`1e-6` becomes `1u`, `10000` becomes `10k`); explicit indexed expressions override formatting. Indexed numeric primary placement parameters receive the same compact formatting. Other slots and later numeric `set_parameter` calls retain their existing behavior. Native numeric caches can remain null until expression evaluation; check generated SPICE or simulation for electrical values.
+
+Omit `reference` / `ref` for repeated power symbols. Duplicate GROUND/VDD/VSS/VCC/VEE/GND default network-style references use native-assigned identities and return `reference_auto_assigned` with requested/actual references and a unique component ID. Global supplies can retain shared refs after reopening; use returned IDs or workflow bindings. Custom duplicate references still fail atomically.
+
 ## Batch edits
 
 `native_edit_batch` takes a nonempty list of operations as one undo unit. Operations run in order; failure restores the checkpoint. Use standalone selector names (`component_ref`, `wire_id`, `object_id`, `junction_id`); older `ref` and `id` aliases also work. Operation names accept the standalone name with or without `native_`, as well as existing camelCase names. Conflicting selectors fail before a checkpoint or edit.
@@ -37,7 +49,7 @@ Common batch operations:
 
 | Operation | Arguments |
 | --- | --- |
-| `place_component` | `name, reference, x, y`, optional `family, group, manufacturer, parameters, anchor, pin` |
+| `place_component` | `name, reference, x, y`, optional `family, group, manufacturer, parameters, anchor, pin, angle, mirror_axis, value, expression` |
 | `set_parameter` | `component_ref, index`, exactly one of `value, expression` |
 | `connect_endpoints` | `source, target`, optional `points` |
 | `move_component` | `component_ref, dx, dy` (relative displacement) |
@@ -122,3 +134,5 @@ Move an overlapping reference with `native_move_component_label(component_ref, x
 Normal saves update the current workspace/source file using `native_save_source`. A workflow `save` without output_path does the same. Save As changes the current document path. Source saves verify native readback by default. An explicit `verify:false` skips reopen verification, including saving to the current path; external-change checks and backups still apply. Closing saves pending edits by default; skip saving only when the task calls for it. Backups and checkpoints are internal, not extra deliverables. `native_open_copy` is for explicit comparisons and creates its editable file in the chosen workspace.
 
 Prepared pin offsets are relative to the returned center anchor, not the native placement origin. Use the returned `anchor`, `pin_offsets_relative_to` and `placement`; each placed component also returns `placement.pin_offsets` for its actual anchor. Symbol `body_bounds` excludes external pin leads; use returned pin coordinates for wiring. Batch `remove` accepts `object_id`/`id` or `component_ref`/`ref`, matching the standalone deletion selectors.
+
+Layout issues retain `component_overlap` and `wire_crosses_component` for body collisions and add `collision_target: "body"`. Pure text collisions return `label_overlap` or `wire_overlaps_label`, `collision_target: "label"`, label kinds/IDs and `suggestion: "move_component_label"`. Wires attached to a symbol can still overlap its labels.

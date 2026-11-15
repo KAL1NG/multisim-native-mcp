@@ -275,12 +275,14 @@ def native_search_library(query: str, limit: int | None = 20, family: str = '', 
 
 @server.tool()
 @checked
-def native_place_component(name: str, x: int, y: int, reference: str | None = None, family: str = '', group: str = '', manufacturer: str = '',parameters: list[dict] | None = None,anchor: Literal['origin','center','pin'] = 'origin',pin: str | None = None,include_parameters: bool = False) -> dict:
-    """Place a real library component. anchor=origin preserves the library graphic origin (not symbol center); center anchors the symbol body, pin anchors the exact named pin. Placement returns requested/actual anchor coordinates and body bounds; grid snapping applies. Read returned pins before routing."""
+def native_place_component(name: str, x: int, y: int, reference: str | None = None, family: str = '', group: str = '', manufacturer: str = '',parameters: list[dict] | None = None,anchor: Literal['origin','center','pin'] = 'origin',pin: str | None = None,include_parameters: bool = False,angle: float | None = None,mirror_axis: Literal['horizontal','vertical'] | None = None,value: float | str | None = None,expression: str | None = None) -> dict:
+    """Place a real library component. Inline angle rotates clockwise in sheet coordinates, then mirror_axis reverses x (horizontal) or y (vertical), then the final origin/center/named-pin anchor is positioned. value or expression selects the unique primary value; numeric placement values use compact SI expressions. Duplicate default power refs use native identity with a warning; bind IDs for repeated symbols. Returns final pins, labels and anchor offsets; grid snapping applies."""
     args={'name':name,'x':x,'y':y,'family':family,'group':group,'manufacturer':manufacturer,'anchor':anchor}
     if pin is not None:args['pin']=pin
     if parameters is not None:args['parameters']=parameters
     if reference is not None: args['ref']=reference
+    for key,item in {'angle':angle,'mirror_axis':mirror_axis,'value':value,'expression':expression}.items():
+        if item is not None:args[key]=item
     return host.edit('place',args)
 
 
@@ -509,7 +511,7 @@ def native_redo() -> dict:
 @server.tool()
 @checked
 def native_check_netlist() -> dict:
-    """Generate the SPICE source used by native analysis. Refresh changed topology only; handles_invalidated=true returns compact current state, handle_generation, id_map and unresolved_ids. Apply mappings to retained handles; workflows rebind automatically. Layout, parameter and free-text edits and repeated connections keep handles stable. A zero resistor value in this source is an actual zero resistance."""
+    """Generate native SPICE and diagnose hidden CMOS/TTL global rails without external connections. diagnostics names dependent parts and required supplies. Refresh changed topology only; handles_invalidated=true returns current state, handle_generation, id_map and unresolved_ids. Apply mappings to retained handles; workflows rebind automatically. A zero resistor value in this source is an actual zero resistance."""
     return host.netlist()
 
 
@@ -688,7 +690,7 @@ def native_export_experiment_report(experiment_id: str, output_directory: str, l
 @server.tool()
 @checked
 def native_check_layout() -> dict:
-    """Check native connector attachment, invisible wires, orthogonal segments, graphic bounding-box overlap and wires crossing other component bounds."""
+    """Check native attachment and routing. Body collisions retain component_overlap/wire_crosses_component; label_overlap/wire_overlaps_label identify label kinds/IDs and suggest move_component_label. collision_target distinguishes body from label."""
     from .layout import check_layout
     with host.lock:return check_layout(host.call('componentBounds')['components'],host.call('wires')['wires'])
 

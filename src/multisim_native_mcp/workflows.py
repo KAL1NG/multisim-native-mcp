@@ -213,6 +213,7 @@ class WorkflowManager:
                             placed=self.host.call('place',{**r,'ref':ref,'x':180,'y':180,'anchor':'center'})
                             c=placed['component'];actual=placed['placement']['actual']
                             entry={'request':r,'library':c.get('library'),'anchor':'center','coordinate_system':'sheet_units',
+                                   'rotation_convention':'Positive angles rotate clockwise on the sheet (x right, y down); rotate, then mirror, then anchor. Horizontal mirror reverses x; vertical mirror reverses y.',
                                    'pin_offsets_relative_to':'placement.actual (center anchor)',
                                    'placement':placed['placement'],'pins':[{'name':p['name'],'dx':p['x']-actual['x'],'dy':p['y']-actual['y']} for p in c['pins']],
                                    'parameters':placed['parameters'],'candidate':candidates[0]}
@@ -326,11 +327,13 @@ class WorkflowManager:
                 if op.get('bind'):schemas[op['bind']]=schema
                 if a.get('anchor')=='pin' and a.get('pin') not in {p['name'] for p in schema['pins']}:
                     issues.append({'operation':op.get('bind'),'error':'Unknown placement anchor pin','available':schema['pins']})
-                if 'value' in a:
+                if 'value' in a or 'expression' in a:
                     slots=[p for p in schema['parameters'] if p.get('role')=='value']
                     if len(slots)!=1:issues.append({'operation':op.get('bind'),'error':'Primary value slot is ambiguous; provide indexed parameters','available':schema['parameters']})
                     else:
-                        value=a.pop('value');slot=slots[0]['index']
+                        if 'value' in a and 'expression' in a:
+                            issues.append({'operation':op.get('bind'),'error':'Provide value or expression, not both'})
+                        value=a.pop('expression') if 'expression' in a else a.pop('value');slot=slots[0]['index']
                         if any(p.get('index')==slot for p in a.get('parameters',[])):issues.append({'operation':op.get('bind'),'error':'Primary value supplied twice'})
                         a.setdefault('parameters',[]).append({'index':slot,'expression' if isinstance(value,str) else 'value':value})
                 indexes={p['index'] for p in schema['parameters']}

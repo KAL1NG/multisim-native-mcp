@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Place rotated/mirrored symbols with final pin/center anchoring and compact engineering value expressions.
+- Reuse an active direct document when opening the same path; tolerate repeated default power-symbol references with explicit warnings.
+- Diagnose missing hidden CMOS/TTL power rails and enrich native simulation failures with command context.
+- Distinguish symbol-body collisions from movable text-label collisions.
+
 ## 0.5.1
 
 - Preserve valid saved hierarchical circuits when deleting connected ports, including undo and redo.

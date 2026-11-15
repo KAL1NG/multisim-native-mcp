@@ -93,7 +93,12 @@ class EditorService(NativeHost):
         if not source.is_absolute():raise ValueError('source_path must be an absolute .ms14 file path')
         source=source.resolve()
         if not source.is_file() or source.suffix.lower()!='.ms14':raise ValueError('Choose an existing .ms14 circuit')
-        if self.process and self.process.poll() is None:raise RuntimeError('Save and close the current circuit first')
+        if self.process and self.process.poll() is None:
+            if not self.isolated and self.working and self.working.resolve()==source and self.source and self.source.resolve()==source:
+                selected=self.call('inspect')
+                if selected.get('projectPath') and Path(selected['projectPath']).resolve()==source:
+                    return {**selected,'source_path':str(source),'working_path':str(source),'mode':'direct','reused':True,'handles_invalidated':False}
+            raise RuntimeError('Save and close the current circuit first')
         running=[p for p in frida.get_local_device().enumerate_processes() if p.name.lower() in ('multisim','multisim.exe')]
         if len(running)==1:
             try:
@@ -550,6 +555,15 @@ class EditorService(NativeHost):
         if op=='place':
             if args.get('anchor','origin') not in ('origin','center','pin'):raise ValueError('Placement anchor must be origin, center or pin')
             if args.get('anchor')=='pin' and not isinstance(args.get('pin'),str):raise ValueError('Placement with anchor=pin requires the exact pin name')
+            if 'angle' in args and (isinstance(args['angle'],bool) or not isinstance(args['angle'],(int,float)) or not math.isfinite(args['angle'])):raise ValueError('Rotation must be finite')
+            if 'mirror_axis' in args and args['mirror_axis'] not in ('horizontal','vertical'):raise ValueError('Invalid mirror axis')
+            if 'value' in args and 'expression' in args:raise ValueError('Provide value or expression, not both')
+            for key in ('value','expression'):
+                if key not in args:continue
+                value=args[key]
+                if isinstance(value,str):
+                    if not value.strip() or '\0' in value:raise ValueError('Invalid placement expression')
+                elif key=='expression' or isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value):raise ValueError('Invalid placement value')
         if op=='place' and 'parameters' in args:
             if not isinstance(args['parameters'],list):raise ValueError('Provide a component parameter list')
             for parameter in args['parameters']:
@@ -600,6 +614,13 @@ class EditorService(NativeHost):
                 before=self.call('circuitState')
                 self.restore(self.checkpoint());refreshed=True
             result=self.call('netlist')
+            from .netlist_diagnostics import hidden_power_diagnostics
+            content=result.get('content','')
+            diagnostics=hidden_power_diagnostics(content)
+            if diagnostics:
+                components=self.call('circuitState',{'include_parameters':True})['components']
+                diagnostics=hidden_power_diagnostics(content,components)
+            result['diagnostics']=diagnostics
             if refreshed:
                 after=self.call('circuitState')
                 return {**result,'handles_invalidated':True,'handle_generation':self.handle_generation,
@@ -698,6 +719,13 @@ class EditorService(NativeHost):
                 netlist=self.netlist()
                 record['netlist']={k:v for k,v in netlist.items() if k!='content'}
                 if netlist['failed']:raise RuntimeError('Native netlist check failed: '+netlist['messages'])
+                missing_rails=[d for d in netlist.get('diagnostics',[]) if d.get('reason')=='missing_connection']
+                if missing_rails:
+                    from .netlist_diagnostics import explain_analysis_failure
+                    result={'failed':True,'stage':'power-rail-preflight','errors':[]}
+                    result.update(explain_analysis_failure(result,missing_rails,analysis,use_initial_conditions))
+                    record['native']=result
+                    raise RuntimeError('Native analysis preflight failed; '+result['error_text'])
                 self.numeric_session_used=True
                 with self.analysis_transport(stem) as transport:
                     result=self.call('simulate',{'analysis':analysis,'step':step,'stop':stop,'use_initial_conditions':use_initial_conditions,
@@ -706,7 +734,9 @@ class EditorService(NativeHost):
                     record['native']=result
                     self.analysis_started.clear()
                     if result.get('failed'):
-                        details=result.get('error_text') or json.dumps(result.get('errors') or [e for t in result.get('trace',[]) for e in t.get('errors',[])])
+                        from .netlist_diagnostics import explain_analysis_failure
+                        result.update(explain_analysis_failure(result,netlist.get('diagnostics',[]),analysis,use_initial_conditions))
+                        details=result['error_text']
                         raise RuntimeError('Native analysis failed at '+result.get('stage','analysis')+'; '+details)
                     exported=self.call('simulationExport',{'path':str(transport.with_suffix('.raw'))});record['export']=exported
                 raw=stem.with_suffix('.raw')
@@ -725,6 +755,7 @@ class EditorService(NativeHost):
             return {'analysis':analysis,'plot':data['plot'],'points':data['points'],'vectors':summary,'unit_system':'SI',
                     'preview':data['rows'][:10],'raw_path':str(raw),'csv_path':str(csv_path),
                     'netlist_path':str(stem.with_suffix('.cir')),'native_result':result,'diagnostic_path':str(diagnostic),
+                    'diagnostics':netlist.get('diagnostics',[]),
                     'handles_invalidated':netlist['handles_invalidated'],
                     **({'document_settings':{'revision':saved['revision'],'saved_to_file':saved['saved_to_file'],
                         'analysis_type':saved['analysis_type'],'commands':native_commands,**({'save':saved['save']} if 'save' in saved else {})}} if saved else {})}

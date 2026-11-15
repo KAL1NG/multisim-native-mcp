@@ -41,9 +41,9 @@
               "y": 180,
               "anchor": "pin",
               "pin": "1",
-              "value": 1000,
               "family": "RESISTOR",
-              "group": "Basic"
+              "group": "Basic",
+              "expression": "1k"
             }
           },
           {
@@ -56,9 +56,9 @@
               "y": 180,
               "anchor": "pin",
               "pin": "1",
-              "value": 1000,
               "family": "RESISTOR",
-              "group": "Basic"
+              "group": "Basic",
+              "expression": "1k"
             }
           },
           {
@@ -66,7 +66,6 @@
             "bind": "ground",
             "arguments": {
               "name": "GROUND",
-              "ref": "0",
               "x": 108,
               "y": 450,
               "anchor": "pin",

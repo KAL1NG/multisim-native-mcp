@@ -29,7 +29,7 @@ Use `native_connect_endpoints` for explicit pin/junction wiring, `native_connect
 | `native_attach` | pid, project_index |
 | `native_create_circuit` | output_path (required absolute filename), title |
 | `native_search_library` | query, limit, family, group |
-| `native_place_component` | name, x, y, reference, family, group, manufacturer, parameters, anchor, pin, include_parameters |
+| `native_place_component` | name, x, y, reference, family, group, manufacturer, parameters, anchor, pin, include_parameters, angle, mirror_axis, value, expression |
 | `native_copy_component` | component_ref, new_ref, x, y |
 | `native_delete_object` | object_id, component_ref |
 | `native_get_parameters` | component_ref |
@@ -157,3 +157,7 @@ See [persistence ownership](persistence.md) for advanced native settings, source
 Ordinary editing uses native_open_circuit on the actual source and native_create_circuit in the task workspace. Native save/close defaults update that document; recovery files are internal. Native interactive configuration defaults to persist:true. Explicit copy mode is for comparisons only. See [file editing defaults](persistence.md#file-editing-defaults-051).
 
 `native_get_circuit_state` omits parameter metadata by default; pass `include_parameters:true` for indexed parameters. `native_save_source(verify:false)` and same-path `native_save_copy(verify:false)` skip reopen verification while retaining backups and external-change checks. A failed verified save returns structured `differences` with field paths and missing/changed content, plus a diagnostic file path.
+
+Hidden CMOS/TTL bridge power nodes are checked in generated SPICE. `native_check_netlist` adds structured `diagnostics` for missing external rail connections or provably floating DC rail networks, naming the rail and dependent components. A plain ground does not automatically define VSS. The native VSS power source defaults to 0 V and defines that global rail without an extra ground wire. Connect the appropriate global power symbols/net labels to the intended supply. Numeric analysis stops at `power-rail-preflight` for these missing connections, before starting the native solver. Floating DC-network warnings remain advisory for transient circuits with initial conditions; numeric results retain them in `diagnostics`.
+
+Failed numeric analyses retain original integer command/status codes and add `error_details` with the actual shell command and stage. Empty native `error_text` is filled with netlist evidence or a readable stage/command summary. Original native status codes are retained alongside readable command context. For a self-starting oscillator (for example a 555 astable), consider `use_initial_conditions: true` (UIC) with appropriate startup conditions, then verify sustained oscillation; UIC skips the DC operating point.

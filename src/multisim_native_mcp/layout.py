@@ -21,10 +21,23 @@ def intersects(a,b,r):
 
 def check_layout(components,wires):
     pins={p['id']:p for c in components for p in c['pins']};issues=[]
+    def overlaps(x,y):
+        return max(x['left'],y['left'])<min(x['right'],y['right']) and max(x['top'],y['top'])<min(x['bottom'],y['bottom'])
+    def body(c):return c.get('body_bounds') or c['bounds']
+    def labels(c):return [l for l in c.get('labels',[]) if l.get('text') and l.get('bounds')]
     for a,b in itertools.combinations(components,2):
-        x,y=a['bounds'],b['bounds']
-        if max(x['left'],y['left'])<min(x['right'],y['right']) and max(x['top'],y['top'])<min(x['bottom'],y['bottom']):
-            issues.append({'kind':'component_overlap','severity':'warning','components':[a['ref'],b['ref']]})
+        if overlaps(body(a),body(b)):
+            issues.append({'kind':'component_overlap','severity':'warning','components':[a['ref'],b['ref']],'collision_target':'body'})
+        for owner,other in ((a,b),(b,a)):
+            for label in labels(owner):
+                if overlaps(label['bounds'],body(other)):
+                    issues.append({'kind':'label_overlap','severity':'warning','component':owner['ref'],'other_component':other['ref'],
+                                   'collision_target':'label','label_kind':label['kind'],'label_id':label.get('id'),'suggestion':'move_component_label'})
+        for la,lb in itertools.product(labels(a),labels(b)):
+            if overlaps(la['bounds'],lb['bounds']):
+                issues.append({'kind':'label_overlap','severity':'warning','components':[a['ref'],b['ref']],
+                               'collision_target':'label','label_kinds':[la['kind'],lb['kind']],
+                               'label_ids':[la.get('id'),lb.get('id')],'suggestion':'move_component_label'})
     for wire in wires:
         points=wire['points']
         if len(points)<2:
@@ -42,8 +55,13 @@ def check_layout(components,wires):
             if a['x']!=b['x'] and a['y']!=b['y']:
                 issues.append({'kind':'diagonal_segment','severity':'warning','wire':wire['id'],'segment':n})
             for c in components:
-                if c['ref'] in (wire['source'].get('ref'),wire['target'].get('ref')):continue
-                if intersects(a,b,c['bounds']):issues.append({'kind':'wire_crosses_component','severity':'warning','wire':wire['id'],'segment':n,'component':c['ref']})
+                attached=any(e.get('component_id')==c.get('id') if e.get('component_id') else e.get('ref')==c['ref'] for e in (wire['source'],wire['target']))
+                if not attached and intersects(a,b,body(c)):
+                    issues.append({'kind':'wire_crosses_component','severity':'warning','wire':wire['id'],'segment':n,'component':c['ref'],'collision_target':'body'})
+                for label in labels(c):
+                    if intersects(a,b,label['bounds']):
+                        issues.append({'kind':'wire_overlaps_label','severity':'warning','wire':wire['id'],'segment':n,'component':c['ref'],
+                                       'collision_target':'label','label_kind':label['kind'],'label_id':label.get('id'),'suggestion':'move_component_label'})
     errors=sum(i['severity']=='error' for i in issues)
     return {'passed':not issues,'errors':errors,'warnings':len(issues)-errors,'issues':issues,
             'component_count':len(components),'wire_count':len(wires)}

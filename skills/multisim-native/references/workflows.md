@@ -35,7 +35,7 @@
 
 An edit operation's `bind` stores its result; every completed stage also binds its result to its `id`. Use `{"$ref":"lower.component.id"}`, `{"$ref":"split.junction_id"}` or `{"$ref":"dc.raw_path"}`. References must name earlier results. Array indices use dot notation. `{"$add":[value,9]}` and `{"$sub":[value,9]}` compute two-term numeric offsets; they can contain references. No executable code is accepted.
 
-A placement's `arguments.value` selects its unique primary-value slot; a string is a SPICE expression. `setParameter` can use `role: value` and an optional parameter `name` instead of `index`. Ambiguous slots return their descriptors rather than selecting a model option.
+A placement's `arguments.value` or `arguments.expression` selects its unique primary-value slot; a string is a SPICE expression. Numeric primary placement values are formatted compactly. Inline `angle` and `mirror_axis` apply before final `anchor` alignment; positive degrees rotate clockwise on the sheet. `setParameter` can use `role: value` and an optional parameter `name` instead of `index`. Ambiguous slots return their descriptors rather than selecting a model option.
 
 Within an edit stage, the executor prepares metadata, resolves dependencies and sends native groups of at most eight operations. The groups yield to Multisim between slices and share the stage's rollback checkpoint. Library selection, actual pin resolution, native handle refresh and subsequent argument binding happen locally.
 
@@ -89,3 +89,5 @@ Check `status` before reporting completion. Default results contain key acceptan
 On failure, inspect the failed phase and its diagnostics, then resume with a replacement tail. Completed stages are retained. Failed edit stages roll back as one unit; analysis and file-output failures retain earlier successful edits and files. Reuse a failed acceptance run's `failure.details.raw_path` with a `verify` stage when only criteria need correction. A service restart marks unfinished work interrupted; resume can reopen the saved successful phase. Revision conflicts require inspection and the current `expected_revision`.
 
 Session creation writes a real workspace circuit from the start. Always supply an absolute output filename selected from the task context. Ordinary `mode: open` edits the actual source; a `save` stage needs no path to save it. A Save As output becomes the current document. Recovery files stay internal.
+
+An `open` session for the same currently selected direct-document path reuses its in-memory edits and handles, including after create/prepare. A different document or isolated comparison still requires closing the current session. Omit power-symbol refs and use placement bindings for multiple grounds or supply symbols.
