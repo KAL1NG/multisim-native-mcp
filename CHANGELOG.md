@@ -1,11 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.5.2
 
 - Release completed numeric simulation sessions before interactive starts, and apply the requested wait timeout to cleanup as well as the start transition.
 - Honor workflow cancellation during component preparation and between operations inside native edit slices, rolling back cancelled stages before accepting further edits.
 - Place rotated/mirrored symbols with final pin/center anchoring and compact engineering value expressions.
-- Reuse an active direct document when opening the same path; tolerate repeated default power-symbol references with explicit warnings.
+- Reuse an active direct document when opening the same path and assign native identities to repeated default power-symbol references.
 - Diagnose missing hidden CMOS/TTL power rails and enrich native simulation failures with command context.
 - Distinguish symbol-body collisions from movable text-label collisions.
 

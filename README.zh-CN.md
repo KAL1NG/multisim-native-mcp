@@ -10,12 +10,13 @@
 - **控制交互仿真**：启动、暂停、继续和停止，设置实时节奏，捕获 LED 与数码管的实际显示状态。
 - **自动完成连续任务**：通过可续跑工作流串联编辑、分析、测量、保存和原理图导出。
 
-## 0.5.1 更新
+## 0.5.2 更新
 
-- 修改和删除自由文本，更新图纸属性、层级端口与分支支点。
-- 修复删除已连接层级端口后的文件保存，支持撤销和重做后的正常保存。
-- 单工具、批量编辑和工作流使用一致的选择参数，默认返回精简的元件参数。
-- 文档刷新后返回对象 ID 映射；保存校验失败时列出具体字段差异。
+- 数值分析结束后自动清理仿真会话，再启动交互仿真；清理与启动共用指定的等待时限。
+- 工作流在元件准备阶段和原生编辑操作之间响应取消，回滚当前编辑阶段。
+- 旋转、镜像后按引脚或中心锚点放置元件，元件数值使用紧凑工程单位标签。
+- 再次打开同一文件时复用当前文档，通过原生对象身份管理重复的电源符号引用。
+- 定位 CMOS/TTL 隐藏电源缺失问题，提供带命令上下文的原生分析错误，区分元件碰撞与标签重叠。
 
 完整变更见[更新日志](CHANGELOG.md)。
 
@@ -33,7 +34,7 @@
 在 PowerShell 中运行，安装服务并配置 Codex：
 
 ```powershell
-irm https://raw.githubusercontent.com/y-wi/multisim-native-mcp/v0.5.1/install.ps1 | iex
+irm https://raw.githubusercontent.com/y-wi/multisim-native-mcp/v0.5.2/install.ps1 | iex
 ```
 
 安装脚本会配置所需的 32 位 Python 环境及包依赖。重启 Codex 后加载 `multisim_native`。
@@ -42,7 +43,7 @@ irm https://raw.githubusercontent.com/y-wi/multisim-native-mcp/v0.5.1/install.ps
 
 ```powershell
 $installer = Join-Path $env:TEMP "multisim-native-install.ps1"
-Invoke-WebRequest "https://github.com/y-wi/multisim-native-mcp/releases/download/v0.5.1/install.ps1" -OutFile $installer
+Invoke-WebRequest "https://github.com/y-wi/multisim-native-mcp/releases/download/v0.5.2/install.ps1" -OutFile $installer
 & $installer -Force
 ```
 
@@ -71,7 +72,7 @@ $mcp = Join-Path $env:LOCALAPPDATA "MultisimNativeMCP\bin\multisim-native-mcp.ex
 & $mcp doctor --connect
 ```
 
-从源码安装时，克隆本仓库后运行 `.\install.ps1`。[发行页面](https://github.com/y-wi/multisim-native-mcp/releases/tag/v0.5.1)也提供 wheel、源码包和 `SHA256SUMS`。
+从源码安装时，克隆本仓库后运行 `.\install.ps1`。[发行页面](https://github.com/y-wi/multisim-native-mcp/releases/tag/v0.5.2)也提供 wheel、源码包和 `SHA256SUMS`。
 
 ## Agent 技能
 
@@ -79,8 +80,8 @@ $mcp = Join-Path $env:LOCALAPPDATA "MultisimNativeMCP\bin\multisim-native-mcp.ex
 
 ```powershell
 $skillRoot = if ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME "skills" } else { Join-Path $env:USERPROFILE ".codex\skills" }
-$skillArchive = Join-Path $env:TEMP "multisim-native-skill-0.5.1.zip"
-Invoke-WebRequest "https://github.com/y-wi/multisim-native-mcp/releases/download/v0.5.1/multisim-native-skill-0.5.1.zip" -OutFile $skillArchive
+$skillArchive = Join-Path $env:TEMP "multisim-native-skill-0.5.2.zip"
+Invoke-WebRequest "https://github.com/y-wi/multisim-native-mcp/releases/download/v0.5.2/multisim-native-skill-0.5.2.zip" -OutFile $skillArchive
 Expand-Archive -LiteralPath $skillArchive -DestinationPath $skillRoot -Force
 ```
 
@@ -125,6 +126,8 @@ Expand-Archive -LiteralPath $skillArchive -DestinationPath $skillRoot -Force
 ### 工作流与长任务
 
 `native_run_workflow` 连续完成编辑、分析、数值判据、保存和导出。使用 `native_workflow_status` 查询进度，使用 `native_control_workflow` 取消或续跑。独立数值分析使用 `native_start_analysis`、`native_analysis_status` 和 `native_control_analysis`。
+
+取消会在元件准备阶段和原生编辑操作之间生效，当前编辑阶段回滚，已完成的阶段保留，供后续续跑使用。
 
 长任务在后台持续运行，客户端可读取进度。工作流默认不设总时限；需要时可用 `max_runtime` 指定。
 

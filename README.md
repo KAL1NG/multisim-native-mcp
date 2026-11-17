@@ -10,12 +10,13 @@ An MCP server for creating, editing and simulating native NI Multisim circuits f
 - **Control interactive simulation:** start, pause, resume and stop simulation, set real-time pacing, and capture actual LED and display states.
 - **Automate complete tasks:** combine edits, analysis, measurements, saves and schematic exports in resumable workflows.
 
-## What's new in 0.5.1
+## What's new in 0.5.2
 
-- Edit and delete free text; update sheet properties, hierarchical ports and branch junctions.
-- Save hierarchical circuits correctly after deleting connected ports, including after undo and redo.
-- Use consistent selectors across individual tools, edit batches and workflows, with concise parameter responses.
-- Receive object ID mappings after document refreshes and detailed field differences when save verification fails.
+- Switch from numeric analysis to interactive simulation with automatic session cleanup and a shared wait timeout for cleanup and startup.
+- Cancel workflows during component preparation and between native editing operations, with rollback of the current edit stage.
+- Place rotated and mirrored components with pin or center anchoring and compact engineering value labels.
+- Reuse the active document when opening the same file and manage repeated power-symbol references through native object identities.
+- Identify missing CMOS/TTL power rails, report native analysis errors with command context, and distinguish symbol collisions from label overlaps.
 
 See the [changelog](CHANGELOG.md) for all changes.
 
@@ -33,7 +34,7 @@ See the [changelog](CHANGELOG.md) for all changes.
 Run in PowerShell to install the server and configure Codex:
 
 ```powershell
-irm https://raw.githubusercontent.com/y-wi/multisim-native-mcp/v0.5.1/install.ps1 | iex
+irm https://raw.githubusercontent.com/y-wi/multisim-native-mcp/v0.5.2/install.ps1 | iex
 ```
 
 The installer sets up the required 32-bit Python environment and package dependencies. Restart Codex to load `multisim_native`.
@@ -42,7 +43,7 @@ To update an existing installation, download and run the installer with `-Force`
 
 ```powershell
 $installer = Join-Path $env:TEMP "multisim-native-install.ps1"
-Invoke-WebRequest "https://github.com/y-wi/multisim-native-mcp/releases/download/v0.5.1/install.ps1" -OutFile $installer
+Invoke-WebRequest "https://github.com/y-wi/multisim-native-mcp/releases/download/v0.5.2/install.ps1" -OutFile $installer
 & $installer -Force
 ```
 
@@ -71,7 +72,7 @@ $mcp = Join-Path $env:LOCALAPPDATA "MultisimNativeMCP\bin\multisim-native-mcp.ex
 & $mcp doctor --connect
 ```
 
-For source installation, clone this repository and run `.\install.ps1`. The [release page](https://github.com/y-wi/multisim-native-mcp/releases/tag/v0.5.1) also provides a wheel, source archive and `SHA256SUMS`.
+For source installation, clone this repository and run `.\install.ps1`. The [release page](https://github.com/y-wi/multisim-native-mcp/releases/tag/v0.5.2) also provides a wheel, source archive and `SHA256SUMS`.
 
 ## Agent skill
 
@@ -79,8 +80,8 @@ The optional [multisim-native skill](skills/multisim-native/SKILL.md) gives the 
 
 ```powershell
 $skillRoot = if ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME "skills" } else { Join-Path $env:USERPROFILE ".codex\skills" }
-$skillArchive = Join-Path $env:TEMP "multisim-native-skill-0.5.1.zip"
-Invoke-WebRequest "https://github.com/y-wi/multisim-native-mcp/releases/download/v0.5.1/multisim-native-skill-0.5.1.zip" -OutFile $skillArchive
+$skillArchive = Join-Path $env:TEMP "multisim-native-skill-0.5.2.zip"
+Invoke-WebRequest "https://github.com/y-wi/multisim-native-mcp/releases/download/v0.5.2/multisim-native-skill-0.5.2.zip" -OutFile $skillArchive
 Expand-Archive -LiteralPath $skillArchive -DestinationPath $skillRoot -Force
 ```
 
@@ -125,6 +126,8 @@ Use `native_simulation_settings` to discover and edit analysis profiles and solv
 ### Workflows and long runs
 
 `native_run_workflow` combines editing, analysis, numeric criteria, saving and export. Read progress with `native_workflow_status`; cancel or resume with `native_control_workflow`. Individual analysis jobs use `native_start_analysis`, `native_analysis_status` and `native_control_analysis`.
+
+Cancellation is handled during component preparation and between native editing operations. The current edit stage is rolled back, and completed stages remain available for resuming the workflow.
 
 Long runs continue in the background while the client reads progress. Workflows have no default runtime deadline; set `max_runtime` when a deadline is needed.
 
