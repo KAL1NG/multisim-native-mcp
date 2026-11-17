@@ -11,6 +11,7 @@ def fake_host(states):
             last=next(iterator,last)
             return {'state_name':last,'state':{'unprepared':-1,'stopped':0,'running':1,'paused':2}[last],'remote_initialized':last in ('running','paused')}
         if operation=='interactiveCommand':return {'action':args['action'],'requested':True,'command_id':42}
+        if operation=='cleanupNumericSession':return {}
         raise AssertionError(operation)
     h.call=call
     return h,calls
@@ -46,7 +47,55 @@ def test_numeric_context_is_cleaned_before_interactive_start():
     result=h.control_interactive('start')
     assert not result['handles_invalidated'] and result['numeric_context_cleaned']
     assert calls.index(('interactiveCommand',{'action':'stop'}))<calls.index(('interactiveCommand',{'action':'start'}))
+    assert calls.index(('cleanupNumericSession',None))<calls.index(('interactiveCommand',{'action':'stop'}))
     assert not h.numeric_session_used
+
+
+@pytest.mark.parametrize('action',['start','stop'])
+def test_numeric_cleanup_timeout_returns_without_starting_or_losing_retry_state(action):
+    h,calls=fake_host(['stopped']);original=h.call;h.numeric_session_used=True
+    def call(op,args=None):
+        value=original(op,args)
+        if op=='interactiveStatus':value['remote_initialized']=True
+        return value
+    h.call=call
+    result=h.control_interactive(action,0)
+    assert result['pending_phase']=='numeric_cleanup'
+    assert not result['transition_confirmed'] and not result['numeric_context_cleaned']
+    assert h.numeric_session_used
+    assert ('interactiveCommand',{'action':'start'}) not in calls
+    h.call=original
+    assert h.control_interactive('stop',0)['numeric_context_cleaned']
+
+
+def test_cleanup_and_start_share_the_callers_wait_deadline(monkeypatch):
+    from multisim_native_mcp import service
+    clock=[0.];monkeypatch.setattr(service.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(service.time,'sleep',lambda seconds:clock.__setitem__(0,clock[0]+seconds))
+    h,calls=fake_host(['stopped']);original=h.call;h.numeric_session_used=True;polls=[0]
+    def call(op,args=None):
+        value=original(op,args)
+        if op=='interactiveStatus':
+            polls[0]+=1;value['remote_initialized']=polls[0]<=3
+        return value
+    h.call=call
+    result=h.control_interactive('start',.3)
+    assert not result['transition_confirmed'] and result['numeric_context_cleaned']
+    assert clock[0]==pytest.approx(.3)
+
+
+def test_reconnected_client_can_clean_an_existing_numeric_session():
+    h,calls=fake_host(['stopped','stopped','running']);original=h.call;first=[True]
+    def call(op,args=None):
+        value=original(op,args)
+        if op=='interactiveStatus' and first[0]:
+            value['remote_initialized']=True;first[0]=False
+        return value
+    h.call=call
+    assert not h.numeric_session_used
+    result=h.control_interactive('start',1)
+    assert result['transition_confirmed'] and result['numeric_context_cleaned']
+    assert ('cleanupNumericSession',None) in calls
 
 
 @pytest.mark.parametrize('args',[{'wait_timeout':-1},{'wait_timeout':float('nan')},{'active_component':''}])

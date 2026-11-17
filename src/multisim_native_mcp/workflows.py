@@ -203,6 +203,7 @@ class WorkflowManager:
                 try:
                     self.host.call('wiringOptions',{'connect_touching':False})
                     for i,r in enumerate(missing):
+                        if self.active and self.cancel_event.is_set():raise InterruptedError('Workflow cancelled during component preparation')
                         search=self.host.call('librarySearch',{'query':r['name'],'family':r['family'],'group':r['group'],'limit':None})
                         candidates=[c for c in search['results'] if c.get('Component_Name','').casefold()==r['name'].casefold()]
                         if r['manufacturer']:candidates=[c for c in candidates if c.get('Manufacturer_Name','').casefold()==r['manufacturer'].casefold()]
@@ -219,6 +220,7 @@ class WorkflowManager:
                                    'parameters':placed['parameters'],'candidate':candidates[0]}
                             self.catalog[digest(r)]=entry
                         except Exception as error:issues.append({'component':r,'error':str(error)})
+                    if self.active and self.cancel_event.is_set():raise InterruptedError('Workflow cancelled during component preparation')
                 finally:
                     self.host.restore(snapshot)
                     self.host.call('wiringOptions',{'connect_touching':options['connect_touching']})
@@ -321,6 +323,7 @@ class WorkflowManager:
                 if r not in requests:requests.append(r)
         if requests:self.prepare(requests)
         for op in ops:
+            if self.active and self.cancel_event.is_set():raise InterruptedError('Workflow cancelled during edit preflight')
             a=op.get('arguments',{})
             if op['operation']=='place':
                 r={k:a.get(k,'') for k in ('name','family','group','manufacturer')};schema=self.catalog[digest(r)]
@@ -411,6 +414,7 @@ class WorkflowManager:
         if kind=='edit':
             # Keep intra-stage references unresolved until their native operation executes.
             ops=copy.deepcopy(stage['operations']);self._preflight_edits(ops,record['bindings'])
+            if self.cancel_event.is_set():raise InterruptedError('Workflow cancelled during edit preflight')
             previous=copy.deepcopy(record['bindings'])
             try:
                 result=self.host.edit_sequence(ops,record['bindings'],self.cancel_event)
@@ -562,6 +566,9 @@ class WorkflowManager:
         with self.guard:
             if self.active!=identifier:return
             self.record['cancel_reason']=reason;self.record['status']='cancel_requested';self.cancel_event.set()
+        if hasattr(self.host,'cancel_edit_sequence'):
+            try:self.host.cancel_edit_sequence()
+            except Exception:pass
         if self.host.analysis_started.is_set():
             try:self.host.agent.exports_sync.control('stop')
             except Exception:pass

@@ -82,6 +82,7 @@ class EditorService(NativeHost):
         super().__init__()
         self.analysis_job=None
         self.numeric_session_used=False
+        self._active_edit_sequence=None
 
     def folder(self):
         if self.session_dir:return self.session_dir
@@ -413,6 +414,7 @@ class EditorService(NativeHost):
                 raise RuntimeError('Stop interactive simulation before editing')
             checkpoint=self.checkpoint();results=[];current=dict(bindings);index=0
             undo_before=list(self.undo_stack);redo_before=list(self.redo_stack)
+            token=uuid.uuid4().hex;self._active_edit_sequence=token
             try:
                 while index<len(operations):
                     if cancel and cancel.is_set():raise RuntimeError('Workflow cancelled between native edit slices')
@@ -421,7 +423,7 @@ class EditorService(NativeHost):
                     if end>index:
                         roots=reference_roots(operations[index:end])
                         value=self.call('editSequence',{'operations':operations[index:end],
-                            'bindings':{k:v for k,v in current.items() if k in roots}})
+                            'bindings':{k:v for k,v in current.items() if k in roots},'cancel_token':token})
                         if value['failed']:
                             index+=value['failed_operation_index'];raise RuntimeError(value['error'])
                         results.extend(value['results']);current.update(value['bindings'])
@@ -447,9 +449,16 @@ class EditorService(NativeHost):
                 raise NativeEditError(str(error),{'rolled_back':True,'rollback_scope':'edit_stage',
                     'failed_operation_index':index,'completed_operations':0,'handles_invalidated':True,
                     'rollback_checkpoint':checkpoint['path']}) from error
+            finally:
+                self._active_edit_sequence=None
             self.undo_stack=undo_before+[checkpoint];self.redo_stack.clear()
             return {'results':results,'bindings':current,'undo_depth':len(self.undo_stack),
                     'rollback_checkpoint':checkpoint['path']}
+
+    def cancel_edit_sequence(self):
+        # Posting must not acquire the editor lock or wait for a UI-thread RPC.
+        token=self._active_edit_sequence
+        if token and self.agent:self.agent.post({'type':'cancel-edit-sequence','token':token})
 
     def batch(self, operations, include_state=False, atomic=True):
         if not operations: raise ValueError('Provide nonempty edit operations')
@@ -849,6 +858,7 @@ class EditorService(NativeHost):
         if action not in ('start','pause','resume','stop'):raise ValueError('Choose start, pause, resume or stop')
         if not math.isfinite(wait_timeout) or wait_timeout<0:raise ValueError('wait_timeout must be finite and nonnegative')
         with self.lock:
+            deadline=time.monotonic()+wait_timeout
             before=self.interactive_status();state=before['state_name']
             target={'start':'running','resume':'running','pause':'paused','stop':'stopped'}[action]
             if (state==target or (action=='stop' and state=='unprepared')) and not self.numeric_session_used and not (action=='stop' and before['remote_initialized']):
@@ -857,15 +867,21 @@ class EditorService(NativeHost):
                 raise ValueError(f'Cannot {action} interactive simulation while {state}')
             cleaned=False
             if self.numeric_session_used or (action=='start' and before['remote_initialized'] and state=='stopped'):
+                if state in ('stopped','unprepared'):
+                    self.call('cleanupNumericSession')
                 self.call('interactiveCommand',{'action':'stop'})
                 while True:
                     current=self.interactive_status()
                     if not current['remote_initialized']:break
-                    time.sleep(.1)
+                    if time.monotonic()>=deadline:
+                        return {**current,'action':action,'requested':True,'previous_state':state,
+                            'transition_confirmed':False,'numeric_context_cleaned':False,
+                            'pending_phase':'numeric_cleanup','handles_invalidated':False}
+                    time.sleep(min(.1,max(0,deadline-time.monotonic())))
                 self.numeric_session_used=False;cleaned=True
                 if action=='stop':
                     return {**current,'action':action,'requested':True,'previous_state':state,'transition_confirmed':True,'numeric_context_cleaned':True}
-            command=self.call('interactiveCommand',{'action':action});deadline=time.monotonic()+wait_timeout
+            command=self.call('interactiveCommand',{'action':action})
             while True:
                 current=self.interactive_status()
                 confirmed=(current['state_name']==target or (action=='stop' and current['state_name']=='unprepared')) and (action!='stop' or not current['remote_initialized'])

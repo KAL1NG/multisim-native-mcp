@@ -1,3 +1,4 @@
+import threading
 import pytest
 
 from multisim_native_mcp.service import EditorService
@@ -52,6 +53,32 @@ def test_native_workflow_build_analyze_save_and_export(tmp_path):
         assert len(detail['completed'])==8
         assert detail['bindings']['lower']['component']['id']==detail['bindings']['build']['results'][2]['component']['id']
         assert (tmp_path/'divider.png').stat().st_size>1000
+    finally:manager.shutdown();host.close()
+
+
+def test_native_cancellation_interrupts_inside_a_packed_edit_and_restores_stage(tmp_path):
+    host=EditorService();manager=WorkflowManager(host,tmp_path/'records');entered=threading.Event();completed=[]
+    try:
+        host.create('Packed cancellation',str(tmp_path/'cancel.ms14'))
+        manager.prepare([{'name':'RESISTOR_VIRTUAL','family':'RESISTOR','group':'Basic'}])
+        host.agent.on('message',lambda message,data:entered.set() if message.get('payload',{}).get('edit_operation_started') else None)
+        original=host.call
+        def call(op,args=None):
+            value=original(op,args)
+            if op=='editSequence':completed.append(len(value['results']))
+            return value
+        host.call=call
+        result=manager.start({'steps':[{'id':'build','kind':'edit','operations':[
+            {'operation':'place','arguments':{'name':'RESISTOR_VIRTUAL','family':'RESISTOR','group':'Basic',
+                'ref':f'R{n+1}','x':90+n*90,'y':180}} for n in range(8)]}]},wait_timeout=0)
+        assert entered.wait(15)
+        result=manager.control(result['id'],'cancel',wait_timeout=15)
+        assert result['status']=='cancelled',result
+        assert completed and 0<completed[0]<8
+        assert host.call('circuitState')['components']==[]
+        result=finish(manager,manager.start({'steps':[{'id':'retry','kind':'edit','operations':[
+            {'operation':'add_text','arguments':{'text':'Recovered','x':90,'y':90}}]}]}))
+        assert result['status']=='complete',result
     finally:manager.shutdown();host.close()
 
 

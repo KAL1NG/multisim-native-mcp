@@ -160,7 +160,9 @@ def test_packed_native_slice_resolves_bindings_and_stops_before_bad_native_calls
     source=(RESOURCE_DIR/'editor_agent.js').read_text(encoding='utf-8')
     section=source[source.index('function sequenceValue('):source.index('const editorHandlers=')]
     harness=r'''
-const assert=require('node:assert/strict');let calls=[];
+const assert=require('node:assert/strict');let calls=[],cancelHandler;const jobs=[];
+function recv(type,handler){cancelHandler=handler;}
+function send(message){}
 const editorHandlers={place:a=>{calls.push(a);return {component:{id:'c'+calls.length,pins:[{x:a.x}]}};}};
 function wire(a){calls.push(a);return {id:'wire'};}
 function move(a){calls.push(a);return a;}
@@ -172,6 +174,17 @@ eval(source+`
  const failed=editSequence({operations:[{operation:'move',arguments:{ref:'c1',dx:'bad',dy:0}}]});
  assert.equal(failed.failed,true);assert.equal(calls.length,2);
  assert.throws(()=>sequenceValue({$ref:'part.constructor'},{part:{}}),/Unresolved/);
+ calls=[];
+ editorHandlers.place=a=>{calls.push(a);cancelHandler({token:'cancel-me'});return {id:'part'};};
+ const cancelled=editSequence({cancel_token:'cancel-me',operations:[
+  {operation:'place',arguments:{name:'R',x:180,y:90}},
+  {operation:'place',arguments:{name:'R',x:270,y:90}}]});
+ assert.equal(cancelled.failed,true);assert.equal(cancelled.failed_operation_index,1);
+ assert.match(cancelled.error,/cancelled/);assert.equal(calls.length,1);
+ cancelHandler({token:'cancel-me'});
+ assert.equal(cancelledEditSequences.size,0);
+ const retried=editSequence({cancel_token:'retry',operations:[{operation:'move',arguments:{ref:'c1',dx:9,dy:0}}]});
+ assert.equal(retried.failed,false);
 `);
 console.log('ok');
 '''
@@ -271,3 +284,52 @@ def test_record_write_failure_releases_waiters_and_execution_slot(tmp_path):
     result=manager.start({'steps':[{'id':'stage','kind':'wiring'}]})
     assert result['status']=='failed' and manager.active is None and manager.finished.is_set()
     assert 'storage unavailable' in manager.status(result['id'])['persistence_error']
+
+
+def test_cancel_is_posted_without_waiting_for_the_editor_lock(tmp_path):
+    from types import SimpleNamespace
+    from multisim_native_mcp.service import EditorService
+    h=EditorService();messages=[];h.agent=SimpleNamespace(post=messages.append)
+    h._active_edit_sequence='active-token'
+    manager=WorkflowManager(h,tmp_path/'records');manager.active='workflow'
+    manager.record={'status':'running'}
+    with h.lock:
+        thread=threading.Thread(target=manager._request_cancel,args=('workflow','User cancelled'))
+        thread.start();thread.join(1)
+        assert not thread.is_alive()
+    assert manager.cancel_event.is_set()
+    assert messages==[{'type':'cancel-edit-sequence','token':'active-token'}]
+    h.agent=None
+
+
+def test_cancel_during_component_preparation_restores_and_skips_later_parts(tmp_path):
+    h=Host(tmp_path);manager=WorkflowManager(h,tmp_path/'records');manager.active='workflow'
+    original=h.call;calls=[];restored=[];h.restore=lambda snapshot:restored.append(snapshot)
+    def call(op,args=None):
+        calls.append(op)
+        if op=='wiringOptions':return {'connect_touching':False}
+        if op=='librarySearch':return {'results':[{'Component_Name':args['query']}]}
+        if op=='place':
+            manager.cancel_event.set()
+            return {'component':{'pins':[]},'placement':{'actual':{'x':180,'y':180}},'parameters':[]}
+        return original(op,args)
+    h.call=call
+    with pytest.raises(InterruptedError,match='component preparation'):
+        manager.prepare([{'name':'FIRST'},{'name':'SECOND'}])
+    assert calls.count('place')==1 and calls.count('librarySearch')==1
+    assert len(restored)==1 and calls[-2:]==['wiringOptions','circuitState']
+
+
+def test_cancelled_native_slice_rolls_back_one_stage_and_clears_token(tmp_path):
+    from multisim_native_mcp.service import EditorService,NativeEditError
+    h=EditorService();checkpoint={'path':str(tmp_path/'checkpoint.ms14')};restored=[]
+    h.checkpoint=lambda:checkpoint;h.restore=lambda value:restored.append(value)
+    def call(op,args=None):
+        if op=='simulationInfo':return {'state':0}
+        assert op=='editSequence' and args['cancel_token']==h._active_edit_sequence
+        return {'failed':True,'failed_operation_index':1,'error':'Workflow cancelled between native edit operations'}
+    h.call=call
+    with pytest.raises(NativeEditError,match='cancelled') as error:
+        h.edit_sequence([{'operation':'addText','arguments':{'text':'test','x':0,'y':0}}]*2,{})
+    assert error.value.details['rolled_back'] and restored==[checkpoint]
+    assert not h.undo_stack and h._active_edit_sequence is None

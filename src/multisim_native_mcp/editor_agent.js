@@ -1440,12 +1440,25 @@ function validateSequenceOperation(op,a){
   for(const k of ['source','target'])if(k in a){const e=a[k];if(!e||!(typeof e.junction_id==='string'||(typeof e.ref==='string'&&typeof e.pin==='string')))throw new Error('Invalid '+k+' endpoint');}
   if('refs' in a&&(!Array.isArray(a.refs)||a.refs.length<1||a.refs.some(r=>typeof r!=='string'||!r)))throw new Error('Invalid component refs');
 }
+const cancelledEditSequences=new Set();
+let activeEditSequence=null;
+function receiveEditCancellation(){
+  recv('cancel-edit-sequence',message=>{
+    if(message.token===activeEditSequence||jobs.some(job=>job.name==='editSequence'&&job.args.cancel_token===message.token))cancelledEditSequences.add(message.token);
+    receiveEditCancellation();
+  });
+}
+receiveEditCancellation();
 function editSequence(args){
   if(!Array.isArray(args.operations)||args.operations.length<1||args.operations.length>8)throw new Error('Native edit slices support 1 to 8 operations');
   const bindings={...(args.bindings||{})},results=[];
+  activeEditSequence=args.cancel_token||null;
+  try{
   for(let index=0;index<args.operations.length;index++){
     const op=args.operations[index];
     try{
+      if(args.cancel_token&&cancelledEditSequences.has(args.cancel_token))throw new Error('Workflow cancelled between native edit operations');
+      if(args.cancel_token)send({edit_operation_started:{token:args.cancel_token,index,operation:op.operation}});
       const a=sequenceValue(op.arguments||{},bindings);validateSequenceOperation(op.operation,a);
       let result;
       if(op.operation==='alignPin'){
@@ -1457,6 +1470,7 @@ function editSequence(args){
     }catch(error){return {failed:true,failed_operation_index:index,error:String(error),results,bindings};}
   }
   return {failed:false,results,bindings};
+  }finally{cancelledEditSequences.delete(args.cancel_token);activeEditSequence=null;}
 }
 const editorHandlers={
   editSequence,
@@ -1474,6 +1488,12 @@ const editorHandlers={
   wiringOptions,connectTouching,autoWire:rerouteNativeWire,
   componentBounds,synchronizeGraphics,circuitState,projectCircuitState,verifySavedCopy,componentLabels,moveLabel:moveComponentLabel,
   simulationCommand:args=>({result:method('SpiceifsSch.dll','?ExecuteShellCmd@CSchSpiceSession@SpiceifsSch@@','int',['pointer','pointer'])(simSession(),Memory.allocUtf16String(args.command)),...simulationInfo()}),
+  cleanupNumericSession:()=>{
+    const info=simulationInfo();
+    if([1,2].includes(info.state))throw new Error('Stop interactive simulation before cleaning the numeric session');
+    if(info.remote_initialized)method('SpiceifsSch.dll','?SessionEndCleanup@CSchSpiceSession@SpiceifsSch@@','void',['pointer'])(simSession());
+    return simulationInfo();
+  },
   parameters:parameterInfo,setParameter,rename:renameComponent,copy:copyComponent,remove:removeObject,transform:transformComponent,route:routeWire,repairWireGeometry,sheets:readSheets,
   electricalPorts:args=>{
     const ci=ciObject(ptr(component(args.ref).id)),count=method('CIRCEXP.dll','?GetPortCount@CiComponent@@','int',['pointer'])(ci),ports=[];
