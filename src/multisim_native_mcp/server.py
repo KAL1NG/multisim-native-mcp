@@ -72,7 +72,57 @@ server = NativeMCPServer('multisim-native', version=__version__,
                    'Coordinates use top-left sheet units, 96 per inch, and may snap to grid. '
                    'Use individual tools or native_edit_batch for local adjustments and consume returned state. '
                    'Waveform values use SI units; verify source current as well as output voltage. '
+                   'Read MCP resources multisim://skill/SKILL.md and multisim://skill/references/editing.md for the verified common-parts pin/parameter cheat sheet and workflow guides. '
                    'Native Multisim schematic editing and analog analysis.')
+
+
+def _read_skill_doc(relative_path: str) -> str:
+    from .clients import bundled_skill_source
+    return (bundled_skill_source() / relative_path).read_text(encoding='utf-8')
+
+
+@server.resource(
+    'multisim://skill/SKILL.md',
+    name='multisim-native-skill',
+    title='Multisim Native Agent Skill Guide',
+    description='Core workflow, geometry, parameter, simulation and save guidance for multisim_native.',
+    mime_type='text/markdown',
+)
+def skill_guide_resource() -> str:
+    return _read_skill_doc('SKILL.md')
+
+
+@server.resource(
+    'multisim://skill/references/editing.md',
+    name='multisim-editing-reference',
+    title='Multisim Editing Contracts & Parts Cheat Sheet',
+    description='Verified Multisim 14.3 common-parts pin names, default spans, named parameters, wiring and sheet fitting.',
+    mime_type='text/markdown',
+)
+def skill_editing_resource() -> str:
+    return _read_skill_doc('references/editing.md')
+
+
+@server.resource(
+    'multisim://skill/references/workflows.md',
+    name='multisim-workflows-reference',
+    title='Multisim Staged Workflows Reference',
+    description='Stage schemas, result bindings, multi-sheet plans and recovery patterns for native_run_workflow.',
+    mime_type='text/markdown',
+)
+def skill_workflows_resource() -> str:
+    return _read_skill_doc('references/workflows.md')
+
+
+@server.resource(
+    'multisim://skill/references/analysis.md',
+    name='multisim-analysis-reference',
+    title='Multisim Simulation & Verification Reference',
+    description='OP, DC sweep, AC sweep, transient, settling time, Bode/PNG plots, interactive displays and experiments.',
+    mime_type='text/markdown',
+)
+def skill_analysis_resource() -> str:
+    return _read_skill_doc('references/analysis.md')
 
 
 @server.tool()

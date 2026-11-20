@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import copy
-from datetime import datetime, timezone
 import json
 import math
 import os
@@ -15,6 +13,24 @@ import time
 
 from . import __version__
 from . import paths as _paths
+from .clients import (
+    CONFIG_FORMATS,
+    SKILL_CLIENTS,
+    SUPPORTED_CLIENTS,
+    bundled_skill_source,
+    codex_document,
+    configure,
+    configure_client,
+    default_config_path,
+    default_skill_dir,
+    detect_clients,
+    install_skill,
+    install_skills_for_client,
+    json_document,
+    opencode_document,
+    render_config,
+    vscode_document,
+)
 
 _INITIAL_DATA_DIR = _paths.DATA_DIR
 
@@ -24,62 +40,6 @@ def client_entry(install_path: str | None = None) -> dict:
     if install_path:
         entry["env"] = {"MULTISIM_NATIVE_INSTALL": str(Path(install_path).resolve())}
     return entry
-
-
-def codex_document(text: str, entry: dict) -> str:
-    """Round-trip other settings, replacing the named server table."""
-    import tomlkit
-    document = tomlkit.parse(text)
-    servers = document.setdefault("mcp_servers", tomlkit.table())
-    settings = tomlkit.table()
-    settings.update(entry)
-    servers["multisim_native"] = settings
-    return tomlkit.dumps(document)
-
-
-def json_document(text: str, entry: dict) -> str:
-    """Round-trip other JSON settings and servers, replacing the multisim_native entry."""
-    if text.strip():
-        try:
-            document = json.loads(text)
-        except json.JSONDecodeError as error:
-            raise ValueError("Invalid JSON MCP configuration") from error
-    else:
-        document = {}
-    if not isinstance(document, dict):
-        raise ValueError("MCP JSON configuration must be a JSON object")
-    servers = document.get("mcpServers")
-    if servers is None:
-        servers = {}
-        document["mcpServers"] = servers
-    elif not isinstance(servers, dict):
-        raise ValueError("mcpServers must be a JSON object")
-    servers["multisim_native"] = copy.deepcopy(entry)
-    return json.dumps(document, indent=2, ensure_ascii=False) + "\n"
-
-
-def configure(path: Path, entry: dict, client: str = 'codex') -> dict:
-    from .dsh_config import dsh_document
-    original = path.read_text(encoding="utf-8-sig") if path.exists() else ""
-    if client not in ('codex', 'dsh', 'json', 'antigravity'):
-        raise ValueError('Choose codex, dsh, json, or antigravity')
-    if client == 'dsh':
-        result = dsh_document(original, entry)
-    elif client == 'codex':
-        result = codex_document(original, entry)
-    else:
-        result = json_document(original, entry)
-    backup = None
-    if original != result:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            backup = path.with_name(path.name + "." + stamp + ".bak")
-            shutil.copy2(path, backup)
-        temporary = path.with_name(path.name + ".multisim.tmp")
-        temporary.write_text(result, encoding="utf-8", newline="\n")
-        temporary.replace(path)
-    return {"config": str(path), "client": client, "server": "multisim_native", "backup": str(backup) if backup else None}
 
 
 def _resolve_data_dir(data_dir: Path | None = None) -> Path:
@@ -241,11 +201,18 @@ def doctor(install_path: str | None = None, connect: bool = False) -> dict:
     if install_path:
         os.environ["MULTISIM_NATIVE_INSTALL"] = str(Path(install_path).resolve())
     from .paths import DATA_DIR, RESOURCE_DIR
+    try:
+        bundled_skill_source()
+        skill_bundled = True
+    except FileNotFoundError:
+        skill_bundled = False
     report = {
         "version": __version__, "platform": sys.platform,
         "python": sys.version.split()[0], "architecture": struct.calcsize("P") * 8,
         "resources": all((RESOURCE_DIR / name).is_file() for name in (
             "host_agent.js", "editor_agent.js", "simulation_settings.js", "startup_agent.js", "native-profile.json", "assets/blank14.3.ms14")),
+        "skill_bundled": skill_bundled,
+        "detected_clients": detect_clients(),
         "data_directory": str(DATA_DIR),
     }
     if sys.platform == "win32" and struct.calcsize("P") == 4:
@@ -296,13 +263,24 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--multisim-path")
     check.add_argument("--connect",action='store_true',help='Check the STDIO handshake, tools and runtime status')
     config = commands.add_parser("config", help="Print an MCP configuration")
-    config.add_argument("--format", choices=["json", "codex", "dsh"], default="json")
+    config.add_argument("--format", choices=list(CONFIG_FORMATS), default="json")
     config.add_argument("--multisim-path")
-    register = commands.add_parser("configure", help="Register the server in an MCP client")
-    register.add_argument("--client", choices=['codex', 'dsh', 'json', 'antigravity'], default='codex')
-    register.add_argument("--profile", default='desktop')
+    register = commands.add_parser("configure", help="Register the server and bundled skill in one or more MCP clients")
+    register.add_argument("--client", choices=list(SUPPORTED_CLIENTS), default="codex")
+    register.add_argument("--profile", default="desktop")
     register.add_argument("--config-path", type=Path)
+    register.add_argument("--project-dir", type=Path)
+    register.add_argument("--skill-dir", type=Path)
+    register.add_argument("--skip-skill", action="store_true", help="Configure MCP only without installing the bundled Agent Skill")
     register.add_argument("--multisim-path")
+    skill_cmd = commands.add_parser("install-skill", help="Install or update the bundled multisim-native Agent Skill")
+    skill_cmd.add_argument("--client", choices=list(SKILL_CLIENTS), default="auto")
+    skill_cmd.add_argument("--profile", default="desktop")
+    skill_cmd.add_argument("--project-dir", type=Path)
+    skill_cmd.add_argument("--skill-dir", type=Path)
+    clients_cmd = commands.add_parser("clients", help="Inspect detected AI agent harnesses and their config/skill paths")
+    clients_cmd.add_argument("--profile", default="desktop")
+    clients_cmd.add_argument("--project-dir", type=Path)
     clean = commands.add_parser("cleanup", help="Prune old tool environments and expired session directories")
     clean.add_argument("--keep-environments", type=int, default=2)
     clean.add_argument("--keep-session-days", type=float, default=7.0)
@@ -310,31 +288,49 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.action == "config":
-            from .dsh_config import dsh_document
             entry = client_entry(args.multisim_path)
-            print(dsh_document('', entry) if args.format == 'dsh' else codex_document("", entry) if args.format == "codex" else json.dumps({"mcpServers": {"multisim_native": entry}}, indent=2))
+            print(render_config(entry, args.format).rstrip("\n"))
             return 0
         if args.action == "configure":
-            from .dsh_config import profile_path
-            if args.config_path:
-                path = args.config_path
-            elif args.client == 'dsh':
-                path = profile_path(args.profile)
-            elif args.client == 'antigravity':
-                gemini = Path.home() / ".gemini"
-                path = gemini / "config" / "mcp_config.json"
-                legacy_path = gemini / "antigravity" / "mcp_config.json"
-                if not path.is_file() and legacy_path.is_file():
-                    path = legacy_path
-            elif args.client == 'json':
-                raise ValueError("Provide --config-path for --client json")
-            else:
-                path = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "config.toml"
-            print(json.dumps(configure(path, client_entry(args.multisim_path), args.client), indent=2))
+            report = configure_client(
+                args.client,
+                client_entry(args.multisim_path),
+                config_path=args.config_path,
+                profile=args.profile,
+                project_dir=args.project_dir,
+                install_skill_files=not args.skip_skill,
+                skill_dir=args.skill_dir,
+            )
+            print(json.dumps(report, indent=2, ensure_ascii=False))
+            return 0
+        if args.action == "install-skill":
+            report = install_skills_for_client(
+                args.client,
+                skill_dir=args.skill_dir,
+                project_dir=args.project_dir,
+                profile=args.profile,
+            )
+            print(json.dumps(report, indent=2, ensure_ascii=False))
+            return 0
+        if args.action == "clients":
+            detected = detect_clients(profile=args.profile)
+            items = []
+            for name in SUPPORTED_CLIENTS:
+                if name in ("auto", "json"):
+                    continue
+                cfg = default_config_path(name, profile=args.profile, project_dir=args.project_dir)
+                skl = default_skill_dir(name, project_dir=args.project_dir)
+                items.append({
+                    "client": name,
+                    "detected": name in detected,
+                    "config_path": str(cfg),
+                    "skill_dir": str(skl) if skl is not None else None,
+                })
+            print(json.dumps({"detected": detected, "clients": items}, indent=2, ensure_ascii=False))
             return 0
         if args.action == "cleanup":
             report = cleanup(args.keep_environments, args.keep_session_days, args.dry_run)
-            print(json.dumps(report, indent=2))
+            print(json.dumps(report, indent=2, ensure_ascii=False))
             return 0
         if args.action == "doctor":
             report = doctor(args.multisim_path,args.connect)

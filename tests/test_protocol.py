@@ -52,6 +52,16 @@ def test_installed_package_stdio(tmp_path):
                 assert len(data['checks']) == 15
                 invalid=await session.call_tool('native_list_components',{})
                 assert invalid.is_error
+                resources = await session.list_resources()
+                uris = {str(item.uri) for item in resources.resources}
+                assert {
+                    'multisim://skill/SKILL.md',
+                    'multisim://skill/references/editing.md',
+                    'multisim://skill/references/workflows.md',
+                    'multisim://skill/references/analysis.md',
+                } <= uris
+                skill_doc = await session.read_resource('multisim://skill/SKILL.md')
+                assert 'multisim-native' in skill_doc.contents[0].text
     asyncio.run(check())
 
 

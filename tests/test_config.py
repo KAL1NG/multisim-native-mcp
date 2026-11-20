@@ -210,3 +210,98 @@ def test_cleanup_prunes_old_envs_and_sessions_while_protecting_active_and_refere
     assert env_active.is_dir() and env_mid.is_dir() and env_new.is_dir()
     assert not sess_expired.exists()
     assert sess_protected.is_dir() and sess_recent.is_dir()
+
+
+def test_multi_harness_formats_auto_detection_and_bundled_skill_sync(tmp_path, monkeypatch, capsys):
+    from multisim_native_mcp.clients import (
+        detect_clients,
+        install_skill,
+        opencode_document,
+        vscode_document,
+    )
+
+    home = tmp_path / 'home'
+    appdata = tmp_path / 'appdata'
+    home.mkdir()
+    appdata.mkdir()
+    monkeypatch.setattr(Path, 'home', staticmethod(lambda: home))
+    monkeypatch.setenv('APPDATA', str(appdata))
+    monkeypatch.delenv('CODEX_HOME', raising=False)
+    monkeypatch.delenv('DSH_HOME', raising=False)
+
+    # 1. VS Code and OpenCode native document schemas round-trip cleanly
+    entry = client_entry(r'C:\NI Suite')
+    vs_doc = json.loads(vscode_document('{"servers":{"other":{"type":"stdio","command":"x"}}}', entry))
+    assert vs_doc['servers']['other']['command'] == 'x'
+    assert vs_doc['servers']['multisim_native']['type'] == 'stdio'
+    assert vs_doc['servers']['multisim_native']['command'] == sys.executable
+
+    oc_doc = json.loads(opencode_document('{"theme":"light","mcp":{"other":{"type":"local","command":["x"]}}}', entry))
+    assert oc_doc['theme'] == 'light' and oc_doc['mcp']['other']['command'] == ['x']
+    assert oc_doc['mcp']['multisim_native']['type'] == 'local'
+    assert oc_doc['mcp']['multisim_native']['command'] == [sys.executable, '-m', 'multisim_native_mcp']
+    assert oc_doc['mcp']['multisim_native']['environment']['MULTISIM_NATIVE_INSTALL'] == str(Path(r'C:\NI Suite').resolve())
+
+    # 2. Conservative detection: Antigravity must NOT false-trigger gemini-cli, and plain VS Code settings must NOT auto-trigger vscode
+    (home / '.gemini' / 'config').mkdir(parents=True)
+    (home / '.gemini' / 'config' / 'mcp_config.json').write_text('{}', encoding='utf-8')
+    (home / '.claude').mkdir()
+    (home / '.cursor').mkdir()
+    (appdata / 'Code' / 'User').mkdir(parents=True)
+    (appdata / 'Code' / 'User' / 'settings.json').write_text('{}', encoding='utf-8')
+    (home / '.config' / 'opencode').mkdir(parents=True)
+
+    detected = detect_clients()
+    assert detected == ['antigravity', 'claude-code', 'cursor', 'opencode']
+    assert 'gemini-cli' not in detected and 'vscode' not in detected
+
+    # 3. configure --client auto configures every detected harness AND installs the bundled skill atomically
+    assert main(['configure', '--client', 'auto']) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report['client'] == 'auto' and report['fallback'] is False
+    assert [c['client'] for c in report['configured']] == ['antigravity', 'claude-code', 'cursor', 'opencode']
+    for rel_skill in [
+        '.gemini/config/skills/multisim-native/SKILL.md',
+        '.claude/skills/multisim-native/SKILL.md',
+        '.cursor/skills/multisim-native/SKILL.md',
+        '.config/opencode/skills/multisim-native/SKILL.md',
+    ]:
+        assert (home / rel_skill).is_file()
+    assert json.loads((home / '.claude.json').read_text(encoding='utf-8'))['mcpServers']['multisim_native']['command'] == sys.executable
+    assert json.loads((home / '.cursor' / 'mcp.json').read_text(encoding='utf-8'))['mcpServers']['multisim_native']['command'] == sys.executable
+    assert json.loads((home / '.config' / 'opencode' / 'opencode.json').read_text(encoding='utf-8'))['mcp']['multisim_native']['type'] == 'local'
+
+    # 4. Idempotency + orphan removal on skill sync, plus --skip-skill and --skill-dir parent normalization
+    agy_skill_dir = home / '.gemini' / 'config' / 'skills' / 'multisim-native'
+    assert install_skill(agy_skill_dir, client='antigravity')['changed'] is False
+    stale = agy_skill_dir / 'stale_obsolete.md'
+    stale.write_text('old', encoding='utf-8')
+    resynced = install_skill(agy_skill_dir.parent, client='antigravity')
+    assert resynced['changed'] is True and not stale.exists()
+    assert Path(resynced['path']) == agy_skill_dir.resolve()
+
+    # 5. Explicit vscode, gemini-cli, windsurf, claude-desktop, project, agents & --skip-skill
+    assert main(['configure', '--client', 'vscode', '--skip-skill']) == 0
+    capsys.readouterr()
+    assert json.loads((appdata / 'Code' / 'User' / 'mcp.json').read_text(encoding='utf-8'))['servers']['multisim_native']['type'] == 'stdio'
+    assert not (home / '.copilot' / 'skills' / 'multisim-native').exists()
+
+    project_root = tmp_path / 'my-project'
+    project_root.mkdir()
+    assert main(['configure', '--client', 'project', '--project-dir', str(project_root)]) == 0
+    capsys.readouterr()
+    assert json.loads((project_root / '.mcp.json').read_text(encoding='utf-8'))['mcpServers']['multisim_native']['command'] == sys.executable
+    assert (project_root / '.agents' / 'skills' / 'multisim-native' / 'SKILL.md').is_file()
+
+    assert main(['install-skill', '--client', 'agents']) == 0
+    capsys.readouterr()
+    assert (home / '.agents' / 'skills' / 'multisim-native' / 'SKILL.md').is_file()
+
+    assert main(['clients']) == 0
+    clients_report = json.loads(capsys.readouterr().out)
+    assert 'vscode' in clients_report['detected'] and 'antigravity' in clients_report['detected']
+
+    for fmt, key in [('vscode', 'servers'), ('opencode', 'mcp'), ('json', 'mcpServers')]:
+        assert main(['config', '--format', fmt]) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert 'multisim_native' in out[key]

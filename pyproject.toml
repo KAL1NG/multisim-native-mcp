@@ -40,6 +40,9 @@ dev = ["pytest>=8,<10", "build>=1.2,<2", "twine>=6,<7"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/multisim_native_mcp"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"skills/multisim-native" = "multisim_native_mcp/bundled_skills/multisim-native"
+
 [tool.hatch.build.targets.sdist]
 include = ["src", "examples", "skills/multisim-native", "docs/tools.md", "docs/workflows.md", "docs/experiments.md", "docs/schematic.md", "docs/persistence.md", "install.ps1", "pyproject.toml", "README.md", "README.zh-CN.md", "LICENSE", "CHANGELOG.md"]
 

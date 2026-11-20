@@ -1,6 +1,10 @@
 ---
 name: multisim-native
 description: "Create, edit, wire, simulate, verify and save native NI Multisim (.ms14) circuits in the task workspace through the multisim_native MCP server (原理图绘制、连线、OP/DC/AC/瞬态/交互仿真、波形测量与 Bode/PNG 绘图)."
+license: MIT
+compatibility: "Windows 10/11 with 32-bit NI Multisim 14.3 and the multisim_native MCP server"
+metadata:
+  version: "0.5.3"
 ---
 
 # Multisim Native
