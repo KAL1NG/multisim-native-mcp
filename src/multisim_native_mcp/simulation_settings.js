@@ -176,7 +176,10 @@ function validateNativeSimulationValue(field,value) {
   if(type==='double'){
     if(typeof value!=='number'||!Number.isFinite(value))throw new Error(field.label+' requires a finite number');
   }else if(type==='long'){
-    if(typeof value==='boolean')value=Number(value);
+    if(typeof value==='boolean'){
+      if(!['IsEnabled','USE_ASYS_OPT','MSM_ASYS_OPT','THROTTLE_SPEED'].includes(field.label))throw new Error(field.label+' requires a signed 32-bit integer');
+      value=Number(value);
+    }
     if(!Number.isInteger(value)||value < -2147483648||value>2147483647)throw new Error(field.label+' requires a signed 32-bit integer');
   }else if(type==='string'){
     if(typeof value!=='string'||value.includes('\0'))throw new Error(field.label+' requires a native string');
@@ -195,6 +198,7 @@ function validateNativeSimulationValue(field,value) {
 function validateSimulationSection(raw) {
   const values=Object.fromEntries(simulationEntries(raw).map(e=>[e.label,e.raw])),analysis=values.ANALYSIS?Object.fromEntries(simulationEntries(values.ANALYSIS).map(e=>[e.label,e.raw])):{};
   if(analysis.TSTOP!==undefined&&Number(analysis.TSTART)>=Number(analysis.TSTOP))throw new Error('TSTART must be less than TSTOP');
+  if(analysis.TSTOP!==undefined&&analysis.TSTEP!==undefined&&analysis.TSTEP!=='calculate'&&!(Number(analysis.TSTEP)<=Number(analysis.TSTOP)))throw new Error('TSTEP cannot exceed TSTOP');
   if(analysis.FSTART!==undefined&&!(Number(analysis.FSTART)>0&&Number(analysis.FSTART)<Number(analysis.FSTOP)))throw new Error('Require 0 < FSTART < FSTOP');
   if(Number(values.DIGITAL_THRESHOLD_L)>Number(values.DIGITAL_THRESHOLD_H))throw new Error('Low digital threshold cannot exceed high threshold');
 }

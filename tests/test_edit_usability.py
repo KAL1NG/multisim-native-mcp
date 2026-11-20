@@ -129,3 +129,75 @@ def test_repeated_connection_does_not_trigger_another_netlist_refresh():
     assert changes_topology('connectTouching',{'topology_changed':True})
     assert not changes_topology('connectTouching',{'topology_changed':False})
     assert not changes_topology('remove',{'deleted':True,'topology_changed':False})
+
+
+def test_label_wire_topology_and_strict_bool_and_selector_validations(tmp_path):
+    assert changes_topology('labelWire', {'id': 'w1', 'name': 'OUT'})
+    assert changes_topology('labelWire', {'id': 'w1', 'name': 'OUT', 'topology_changed': True})
+
+    # Normalize new fit_sheet / translate_sheet / named set_parameter operations
+    assert EditorService.normalize_edit({'operation': 'native_fit_sheet', 'arguments': {'margin': 18}}) == {
+        'operation': 'fitSheet',
+        'arguments': {'margin': 18},
+    }
+    assert EditorService.normalize_edit({'operation': 'translate_sheet', 'arguments': {'dx': 9, 'dy': 18}}) == {
+        'operation': 'translateSheet',
+        'arguments': {'dx': 9, 'dy': 18},
+    }
+    assert EditorService.normalize_edit(
+        {'operation': 'set_parameter', 'arguments': {'component_ref': 'V1', 'index': None, 'name': 'frequency', 'expression': '1k'}}
+    ) == {
+        'operation': 'setParameter',
+        'arguments': {'ref': 'V1', 'name': 'frequency', 'expression': '1k'},
+    }
+
+    # Valid named/default setParameter & place params
+    EditorService.validate('setParameter', {'ref': 'R1', 'value': 2200})
+    EditorService.validate('setParameter', {'ref': 'V1', 'name': 'frequency', 'expression': '1k'})
+    EditorService.validate('setParameter', {'ref': 'R1', 'role': 'value', 'value': 1000})
+    EditorService.validate('place', {'name': 'CLOCK_VOLTAGE', 'x': 90, 'y': 90, 'params': {'frequency': '2k', 'voltage': 5}})
+    EditorService.validate('fitSheet', {'margin': 36, 'resize': True})
+    EditorService.validate('translateSheet', {'dx': 18, 'dy': -9})
+
+    # Strict rejections (empty labelWire, both/neither transform, missing/both setParameter, bool-as-int)
+    invalid_cases = [
+        ('labelWire', {'id': 'w1', 'name': ''}),
+        ('labelWire', {'id': 'w1', 'name': '   '}),
+        ('transform', {'ref': 'R1'}),
+        ('transform', {'ref': 'R1', 'angle': 90, 'axis': 'horizontal'}),
+        ('transform', {'ref': 'R1', 'angle': True}),
+        ('setParameter', {'ref': 'R1', 'index': 1}),
+        ('setParameter', {'ref': 'R1', 'index': 1, 'value': 10, 'expression': '10'}),
+        ('setParameter', {'ref': 'R1', 'index': True, 'value': 10}),
+        ('setParameter', {'ref': 'R1', 'index': 1, 'value': False}),
+        ('setParameter', {'ref': 'R1', 'name': '  ', 'value': 10}),
+        ('place', {'name': 'R', 'x': True, 'y': 90}),
+        ('place', {'name': 'R', 'x': 90, 'y': 90, 'params': {'frequency': True}}),
+        ('move', {'ref': 'R1', 'dx': True, 'dy': 0}),
+        ('sheetSize', {'width': True, 'height': 720}),
+        ('fitSheet', {'margin': True}),
+        ('fitSheet', {'margin': -9}),
+        ('fitSheet', {'resize': 1}),
+        ('translateSheet', {'dx': True, 'dy': 0}),
+    ]
+    for op, args in invalid_cases:
+        with pytest.raises(ValueError, match='.'):
+            EditorService.validate(op, args)
+
+    host = EditorService()
+    raw = tmp_path / 'sample.raw'
+    raw.write_text('Plotname: DC Operating Point\nNo. Variables: 1\nNo. Points: 1\nVariables:\n0 v1 voltage V(1)\nValues:\n0 5\n')
+    for bad_read in [
+        {'offset': True},
+        {'limit': True},
+        {'plot_index': True},
+    ]:
+        with pytest.raises(ValueError):
+            host.read_waveform(str(raw), **bad_read)
+    for bad_img in [
+        {'dpi': True},
+        {'scale': True},
+        {'padding': True},
+    ]:
+        with pytest.raises(ValueError):
+            host.export_image(str(tmp_path / 'out.png'), **bad_img)

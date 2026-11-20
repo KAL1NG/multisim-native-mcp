@@ -1,6 +1,7 @@
 """Persistent, explicitly retried native experiments."""
 import copy
 import json
+import os
 import re
 import threading
 import time
@@ -9,6 +10,24 @@ from pathlib import Path
 from .paths import DATA_DIR
 from .bridge import sha256
 from .experiments import run_sweep,validate_spec
+
+
+def process_alive(pid):
+    if isinstance(pid,bool) or not isinstance(pid,int) or pid<=0:return False
+    if pid==os.getpid():return True
+    if os.name!='nt':return False
+    import ctypes
+    from ctypes import wintypes
+    kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+    kernel.OpenProcess.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.DWORD];kernel.OpenProcess.restype=wintypes.HANDLE
+    kernel.GetExitCodeProcess.argtypes=[wintypes.HANDLE,ctypes.POINTER(wintypes.DWORD)]
+    kernel.CloseHandle.argtypes=[wintypes.HANDLE]
+    handle=kernel.OpenProcess(0x1000,False,pid)
+    if not handle:return False
+    try:
+        code=wintypes.DWORD()
+        return bool(kernel.GetExitCodeProcess(handle,ctypes.byref(code))) and code.value==259
+    finally:kernel.CloseHandle(handle)
 
 
 class ExperimentStore:
@@ -25,7 +44,7 @@ class ExperimentStore:
     def read(self,identifier):
         with self.lock:return json.loads(self.path(identifier).read_text(encoding='utf-8'))
     def list(self,limit=20):
-        if limit<1:raise ValueError('Limit must be positive')
+        if isinstance(limit,bool) or not isinstance(limit,int) or limit<1:raise ValueError('Limit must be positive')
         with self.lock:
             paths=sorted(self.root.glob('*.json'),key=lambda p:p.stat().st_mtime,reverse=True)[:limit]
             return [{k:v for k,v in json.loads(p.read_text(encoding='utf-8')).items() if k in ('id','status','created','finished','retry_of','error')} for p in paths]
@@ -37,7 +56,7 @@ class ExperimentManager:
         self.active=None;self.thread=None;self.cancel_event=threading.Event()
         for p in self.store.root.glob('*.json'):
             record=self.store.read(p.stem)
-            if record['status'] in ('queued','running','cancel_requested'):
+            if record['status'] in ('queued','running','cancel_requested') and not process_alive(record.get('owner_pid')):
                 record.update(status='interrupted',finished=time.time());self.store.write(record)
 
     def start(self,parameters,analysis,measurements,criteria=None,objective=None,background=True,retry_of=None):
@@ -52,7 +71,7 @@ class ExperimentManager:
                 image=self.store.root/(identifier+'.png')
                 self.host.export_image(str(image.resolve()))
             record={'id':identifier,'status':'queued','created':time.time(),'spec':spec,'schematic_path':str(image.resolve()),
-                    'source':source,'source_sha256':sha256(Path(source)),'retry_of':retry_of}
+                    'source':source,'source_sha256':sha256(Path(source)),'retry_of':retry_of,'owner_pid':os.getpid()}
             if hasattr(self.host,'document_context'):record['document']=self.host.document_context()
             self.store.write(record);self.active=record['id'];self.cancel_event.clear()
             def execute():

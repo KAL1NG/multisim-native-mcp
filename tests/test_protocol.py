@@ -11,7 +11,7 @@ def test_installed_package_stdio(tmp_path):
             async with ClientSession(reader,writer,read_timeout_seconds=30) as session:
                 initialized=await session.initialize()
                 assert initialized.server_info.name == 'multisim-native'
-                assert initialized.server_info.version == '0.5.2'
+                assert initialized.server_info.version == '0.5.3'
                 listed=await session.list_tools();names={tool.name for tool in listed.tools}
                 interactive=next(tool for tool in listed.tools if tool.name=='native_configure_interactive')
                 assert {'persist','save_to_source'}<=interactive.input_schema['properties'].keys()
@@ -28,9 +28,18 @@ def test_installed_package_stdio(tmp_path):
                 assert capture.input_schema['properties']['wait_timeout']['default'] is None
                 state_tool=next(t for t in listed.tools if t.name=='native_get_circuit_state')
                 assert state_tool.input_schema['properties']['include_parameters']['default'] is False
+                assert state_tool.input_schema['properties']['include_nets']['default'] is False
+                search_tool=next(t for t in listed.tools if t.name=='native_search_library')
+                assert {'manufacturer','simulatable_only'}<=search_tool.input_schema['properties'].keys()
+                set_param_tool=next(t for t in listed.tools if t.name=='native_set_parameter')
+                assert {'index','name','role','value','expression'}<=set_param_tool.input_schema['properties'].keys()
+                assert set_param_tool.input_schema['required']==['component_ref']
+                place_tool=next(t for t in listed.tools if t.name=='native_place_component')
+                assert 'params' in place_tool.input_schema['properties']
                 save_tool=next(t for t in listed.tools if t.name=='native_save_source')
                 assert save_tool.input_schema['properties']['verify']['default'] is True
-                assert len(names)==81
+                assert len(names)==86
+                assert {'native_get_connectivity','native_resolve_signal','native_run_dc_sweep','native_fit_sheet','native_plot_waveform'} <= names
                 assert {'native_list_texts','native_update_text','native_update_sheet','native_update_hierarchical_port','native_move_junction'} <= names
                 assert {'native_connect_pins','native_delete_text'}.isdisjoint(names)
                 alias=await session.call_tool('native_delete_text',{'object_id':'missing'})
@@ -64,5 +73,5 @@ def test_connection_check_does_not_change_existing_experiment_records(tmp_path,m
     record.write_bytes(raw)
     monkeypatch.setenv('MULTISIM_NATIVE_DATA_DIR',str(tmp_path))
     result=asyncio.run(check_connection())
-    assert result['tool_count']==81 and result['server_version']=='0.5.2'
+    assert result['tool_count']==86 and result['server_version']=='0.5.3'
     assert record.read_bytes()==raw

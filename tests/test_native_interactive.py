@@ -9,7 +9,7 @@ pytestmark=pytest.mark.native
 def test_numeric_to_interactive_controls_and_actual_lit_capture(tmp_path):
     h=EditorService()
     try:
-        h.create('Native interactive display')
+        h.create('Native interactive display',str(tmp_path/'interactive-display.ms14'))
         for name,ref,x,y in [('DC_POWER','V1',90,90),('GROUND','0',90,585),('SEVEN_SEG_COM_A','DS1',540,270)]:
             h.edit('place',{'name':name,'ref':ref,'x':x,'y':y})
         for i in range(7):h.edit('place',{'name':'RESISTOR_VIRTUAL','ref':'R'+str(i+1),'x':300,'y':90+i*63,'parameters':[{'index':1,'value':330}]})

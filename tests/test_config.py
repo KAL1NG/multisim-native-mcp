@@ -1,10 +1,15 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import tomllib
 
-from multisim_native_mcp.cli import client_entry, codex_document, configure
+import pytest
+
+from multisim_native_mcp import cli
+from multisim_native_mcp.cli import cleanup, client_entry, codex_document, configure, json_document, main
 
 
 def test_codex_round_trip_preserves_other_servers():
@@ -57,7 +62,151 @@ def test_config_command_emits_launchable_json():
 
 
 def test_cli_configure_isolated_home(tmp_path):
-    import os
     environment = dict(os.environ, CODEX_HOME=str(tmp_path))
     subprocess.run([sys.executable,'-m','multisim_native_mcp','configure'],env=environment,capture_output=True,text=True,check=True)
     assert tomllib.loads((tmp_path/'config.toml').read_text())['mcp_servers']['multisim_native']['command'] == sys.executable
+
+
+def test_json_configure_preserves_other_keys_and_backups(tmp_path):
+    config_file = tmp_path / 'mcp_config.json'
+    original_data = {
+        'theme': 'dark',
+        'mcpServers': {
+            'other_server': {'command': 'node', 'args': ['server.js']},
+            'multisim_native': {'command': 'stale.exe', 'env': {'OLD': '1'}},
+        },
+    }
+    raw_initial = json.dumps(original_data, indent=2) + '\n'
+    config_file.write_text(raw_initial, encoding='utf-8')
+    entry = client_entry(r'C:\NI Suite')
+
+    first = configure(config_file, entry, client='json')
+    assert first['client'] == 'json' and first['backup'] is not None
+    assert Path(first['backup']).read_text(encoding='utf-8') == raw_initial
+    parsed = json.loads(config_file.read_text(encoding='utf-8'))
+    assert parsed['theme'] == 'dark'
+    assert parsed['mcpServers']['other_server'] == {'command': 'node', 'args': ['server.js']}
+    assert parsed['mcpServers']['multisim_native']['command'] == sys.executable
+    assert 'OLD' not in parsed['mcpServers']['multisim_native'].get('env', {})
+    assert configure(config_file, entry, client='json')['backup'] is None
+
+    # Invalid JSON or invalid mcpServers leaves file untouched
+    bad = tmp_path / 'bad.json'
+    bad.write_bytes(b'{not json')
+    with pytest.raises(ValueError, match='Invalid JSON'):
+        configure(bad, entry, client='json')
+    assert bad.read_bytes() == b'{not json'
+    with pytest.raises(ValueError, match='JSON object'):
+        json_document('[]', entry)
+    with pytest.raises(ValueError, match='mcpServers'):
+        json_document('{"mcpServers": []}', entry)
+
+    assert main(['configure', '--client', 'json']) == 1
+
+
+@pytest.mark.parametrize(('current_exists', 'legacy_exists', 'target_directory'), [
+    (False, False, 'config'),
+    (True, False, 'config'),
+    (False, True, 'antigravity'),
+    (True, True, 'config'),
+])
+def test_antigravity_configure_selects_profile(tmp_path, monkeypatch, current_exists, legacy_exists, target_directory):
+    monkeypatch.setattr(Path, 'home', staticmethod(lambda: tmp_path))
+    profile = tmp_path / '.gemini'
+    for directory, exists in [('config', current_exists), ('antigravity', legacy_exists)]:
+        if exists:
+            path = profile / directory / 'mcp_config.json'
+            path.parent.mkdir(parents=True)
+            path.write_text('{}', encoding='utf-8')
+
+    assert main(['configure', '--client', 'antigravity']) == 0
+    agy_cfg = profile / target_directory / 'mcp_config.json'
+    assert json.loads(agy_cfg.read_text(encoding='utf-8'))['mcpServers']['multisim_native']['command'] == sys.executable
+    if current_exists and legacy_exists:
+        assert (profile / 'antigravity' / 'mcp_config.json').read_text(encoding='utf-8') == '{}'
+
+
+def test_cleanup_prunes_old_envs_and_sessions_while_protecting_active_and_referenced(tmp_path, monkeypatch):
+    data_dir = tmp_path / 'data'
+    envs_dir = data_dir / 'tools' / 'environments'
+    sessions_dir = data_dir / 'sessions'
+    workflows_dir = data_dir / 'workflows'
+    experiments_dir = data_dir / 'experiments'
+    for d in (envs_dir, sessions_dir, workflows_dir, experiments_dir):
+        d.mkdir(parents=True)
+
+    now = time.time()
+    # Create 4 install-* envs: oldest is the active interpreter environment!
+    env_active = envs_dir / 'install-active'
+    (env_active / 'Scripts').mkdir(parents=True)
+    fake_exe = env_active / 'Scripts' / 'python.exe'
+    fake_exe.write_bytes(b'x' * 128)
+    os.utime(env_active, (now - 4000, now - 4000))
+
+    env_old = envs_dir / 'install-old'
+    env_old.mkdir()
+    (env_old / 'payload.bin').write_bytes(b'y' * 256)
+    os.utime(env_old, (now - 3000, now - 3000))
+
+    env_mid = envs_dir / 'install-mid'
+    env_mid.mkdir()
+    (env_mid / 'payload.bin').write_bytes(b'z' * 64)
+    os.utime(env_mid, (now - 200, now - 200))
+
+    env_new = envs_dir / 'install-new'
+    env_new.mkdir()
+    (env_new / 'payload.bin').write_bytes(b'w' * 64)
+    os.utime(env_new, (now - 100, now - 100))
+
+    # Create 3 session dirs: expired unreferenced, expired referenced by interrupted workflow, and recent
+    sess_expired = sessions_dir / 's-expired'
+    sess_expired.mkdir()
+    (sess_expired / 'checkpoint.ms14').write_bytes(b'a' * 512)
+    os.utime(sess_expired, (now - 10 * 86400, now - 10 * 86400))
+
+    sess_protected = sessions_dir / 's-protected'
+    sess_protected.mkdir()
+    ckpt = sess_protected / 'resume.ms14'
+    ckpt.write_bytes(b'b' * 512)
+    os.utime(sess_protected, (now - 10 * 86400, now - 10 * 86400))
+    (workflows_dir / ('f' * 32 + '.json')).write_text(
+        json.dumps({'id': 'f' * 32, 'status': 'interrupted', 'resume_checkpoint': {'path': str(ckpt)}}),
+        encoding='utf-8',
+    )
+
+    sess_recent = sessions_dir / 's-recent'
+    sess_recent.mkdir()
+    (sess_recent / 'recent.ms14').write_bytes(b'c' * 64)
+    os.utime(sess_recent, (now - 3600, now - 3600))
+
+    monkeypatch.setattr(cli.sys, 'executable', str(fake_exe))
+    monkeypatch.setattr(cli.sys, 'prefix', str(env_active))
+
+    # Reject invalid cleanup parameters
+    for bad_kwargs in (
+        {'keep_environments': True},
+        {'keep_environments': -1},
+        {'keep_session_days': False},
+        {'keep_session_days': -0.5},
+        {'dry_run': 1},
+    ):
+        with pytest.raises(ValueError):
+            cleanup(data_dir=data_dir, **bad_kwargs)
+
+    # Dry-run reports without deleting
+    dry = cleanup(keep_environments=2, keep_session_days=7.0, dry_run=True, data_dir=data_dir)
+    assert dry['dry_run'] is True
+    assert dry['removed_environments'] == [str(env_old)]
+    assert str(env_active) in dry['kept_environments']
+    assert dry['removed_sessions'] == [str(sess_expired)]
+    assert any(Path(s['path']) == sess_protected for s in dry['skipped_sessions'])
+    assert dry['freed_bytes'] == 256 + 512
+    assert env_old.is_dir() and sess_expired.is_dir()
+
+    # Real cleanup via CLI removes only env_old and sess_expired
+    monkeypatch.setenv('MULTISIM_NATIVE_DATA_DIR', str(data_dir))
+    assert main(['cleanup', '--keep-environments', '2', '--keep-session-days', '7']) == 0
+    assert not env_old.exists()
+    assert env_active.is_dir() and env_mid.is_dir() and env_new.is_dir()
+    assert not sess_expired.exists()
+    assert sess_protected.is_dir() and sess_recent.is_dir()

@@ -9,7 +9,7 @@ pytestmark = pytest.mark.native
 def test_shared_power_symbols_move_by_id_without_changing_other_attachments(tmp_path):
     h = EditorService()
     try:
-        h.create('Shared power symbol movement')
+        h.create('Shared power symbol movement', str(tmp_path / 'shared-power-init.ms14'))
         h.call('wiringOptions', {'connect_touching': False, 'autowire_on_connection': False})
         for i, x in enumerate((180, 540), 1):
             power = h.edit('place', {'name': 'VCC', 'ref': f'P{i}', 'x': x, 'y': 180,

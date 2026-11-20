@@ -1,8 +1,8 @@
 # Tool reference / 工具参考
 
-Use `native_connect_endpoints` for explicit pin/junction wiring, `native_connect_touching` to detect physical contacts, and `native_delete_object` to delete any supported object. The default catalog lists 81 tools; two callable compatibility aliases are documented below.
+Use `native_connect_endpoints` for explicit pin/junction wiring, `native_connect_touching` to detect physical contacts, and `native_delete_object` to delete any supported object. The default catalog lists 86 tools; two callable compatibility aliases are documented below.
 
-明确指定引脚或接点时使用 `native_connect_endpoints`；检查物理接触使用 `native_connect_touching`；删除对象统一使用 `native_delete_object`。默认工具列表为 81 项，下方另列两个可继续调用的兼容别名。
+明确指定引脚或接点时使用 `native_connect_endpoints`；检查物理接触使用 `native_connect_touching`；删除对象统一使用 `native_delete_object`。默认工具列表为 86 项，下方另列两个可继续调用的兼容别名。
 
 | Tool | Parameters |
 | --- | --- |
@@ -17,7 +17,9 @@ Use `native_connect_endpoints` for explicit pin/junction wiring, `native_connect
 | `native_open_circuit` | source_path, include_parameters |
 | `native_open_copy` | source_path, output_path (explicit comparison), include_parameters |
 | `native_list_components` | — |
-| `native_get_circuit_state` | include_parameters |
+| `native_get_circuit_state` | include_parameters, include_nets |
+| `native_get_connectivity` | — |
+| `native_resolve_signal` | component_ref, pin |
 | `native_move_component_label` | component_ref, x, y, kind |
 | `native_list_wires` | component_ref |
 | `native_move_component` | component_ref, dx, dy |
@@ -28,12 +30,12 @@ Use `native_connect_endpoints` for explicit pin/junction wiring, `native_connect
 | `native_close_copy` | save_changes (default true) |
 | `native_attach` | pid, project_index |
 | `native_create_circuit` | output_path (required absolute filename), title |
-| `native_search_library` | query, limit, family, group |
-| `native_place_component` | name, x, y, reference, family, group, manufacturer, parameters, anchor, pin, include_parameters, angle, mirror_axis, value, expression |
+| `native_search_library` | query, limit, family, group, manufacturer, simulatable_only |
+| `native_place_component` | name, x, y, reference, family, group, manufacturer, parameters, anchor, pin, include_parameters, angle, mirror_axis, value, expression, params |
 | `native_copy_component` | component_ref, new_ref, x, y |
 | `native_delete_object` | object_id, component_ref |
 | `native_get_parameters` | component_ref |
-| `native_set_parameter` | component_ref, index, value, expression |
+| `native_set_parameter` | component_ref, index, value, expression, name, role |
 | `native_replace_component` | component_ref, name, pin_map, family, group |
 | `native_get_model` | component_ref |
 | `native_set_model_text` | component_ref, text |
@@ -53,6 +55,7 @@ Use `native_connect_endpoints` for explicit pin/junction wiring, `native_connect
 | `native_select_sheet` | index |
 | `native_create_sheet` | title, page |
 | `native_update_sheet` | title, page, width, height |
+| `native_fit_sheet` | margin, resize |
 | `native_create_subcircuit` | title, reference, x, y |
 | `native_create_hierarchical_port` | name, x, y |
 | `native_update_hierarchical_port` | object_id, name, x, y |
@@ -72,8 +75,10 @@ Use `native_connect_endpoints` for explicit pin/junction wiring, `native_connect
 | `native_read_waveform` | raw_path, offset, limit, plot_index |
 | `native_export_image` | output_path, overwrite, dpi, scale, region, fit_content, padding, show_frame, show_grid |
 | `native_run_ac_sweep` | sweep, points, start_hz, stop_hz, persist, save_to_source, use_saved_settings |
+| `native_run_dc_sweep` | source, start, stop, step |
 | `native_measure_waveform` | raw_path, measurements |
 | `native_verify_waveform` | raw_path, measurements, criteria |
+| `native_plot_waveform` | raw_path, output_path, signals, reference, title, overwrite, plot_index, overlay |
 | `native_decode_seven_segment` | raw_path, digits, expected, start, stop, threshold, active_high, select_threshold, select_active_high, settling, min_dwell |
 | `native_run_parameter_sweep` | parameters, analysis, measurements, criteria, objective |
 | `native_start_experiment` | parameters, analysis, measurements, criteria, objective |
@@ -116,9 +121,9 @@ These names remain callable but are omitted from the default catalog:
 
 `state.texts` and `native_list_texts` expose free-text IDs, content, insertion coordinates, transforms and bounds. `native_update_text` changes supplied content/coordinates in place and retains formatting; an empty string clears content. Delete with `native_delete_object`. These operations support undo, redo and verified source saves. Hierarchical port deletion updates its native node information and parent connections before saving.
 
-`native_update_sheet` edits selected-sheet properties. `native_update_hierarchical_port` updates a connector's electrical name/position and its parent symbol; `native_move_junction` preserves branch wires while moving their common endpoint. Existing component tools edit subcircuit symbols; existing wire tools edit routes, names and endpoints. Batch/workflow counterparts: `updateText`, `deleteText`, `updateSheet`, `updatePort`, `moveJunction` (object selectors use `id`, also `object_id` for text).
+`native_update_sheet` edits sheet properties. `native_fit_sheet` moves off-page contents inward on the grid in one undoable edit and accepts `margin` and `resize`. `native_update_hierarchical_port` updates a connector's electrical name and position together with its parent symbol. `native_move_junction` moves the common endpoint while retaining branch wires. `native_label_wire` sets a wire's net name. Separate electrical nets require distinct names. `native_get_connectivity` returns wire and pin net mappings, and `native_resolve_signal` maps a component pin to its SPICE waveform vector name. The same component and wire tools apply to subcircuit symbols and their connections. Use `updateText`, `deleteText`, `updateSheet`, `fitSheet`, `translateSheet`, `updatePort` and `moveJunction` in batches and workflows. Object selectors accept `id`, and text selectors also accept `object_id`.
 
-`state.texts` 与 `native_list_texts` 返回自由文本的 ID、内容、插入坐标、变换和边界。`native_update_text` 原位修改指定内容或坐标，保留格式；空字符串清空内容。`native_delete_object` 删除文本，支持撤销、重做和源文件保存校验。层级端口删除会同步原生节点信息及父图纸连接。另有图纸属性修改、层级端口改名/移动、保留连线的分支接点移动接口；批处理与工作流同样支持。
+`state.texts` 与 `native_list_texts` 返回自由文本的 ID、内容、插入坐标、变换和边界。`native_update_text` 原位修改指定内容或坐标，保留格式；空字符串清空内容。`native_delete_object` 删除文本，支持撤销、重做和源文件保存校验。层级端口删除会同步原生节点信息及父图纸连接。另有图纸属性修改、`native_fit_sheet` 一键适配图纸、网络连通性查询、引脚波形向量解析、层级端口改名/移动、保留连线的分支接点移动及防重名导线标号校验；批处理与工作流同样支持（含 `fitSheet` / `translateSheet`）。
 
 ### Shared power references / 同名电源符号
 
@@ -148,15 +153,17 @@ Synchronize symbol and junction graphics with grid-snapped electrical connectors
 
 `native_control_interactive` 支持 `start`、`pause`、`resume`、`stop`，返回实际状态 `state_name`、仿真时间 `simulation_time_s`、错误及 `transition_confirmed`。重复请求已达到的状态不会重新运行；`transition_confirmed: false` 表示仍待确认，可继续查询状态。数值分析切换到交互仿真前自动清理仿真会话，保留对象句柄。编辑、重新生成网表或运行数值分析前，先停止交互仿真。
 
-`native_interactive_status(include_displays: true)` reads native `SEVEN_SEG_COM_A` segment states in `abcdefg` order. `native_export_interactive_image` captures those actual states and the circuit through the native bitmap renderer. Set `active_component` to a display reference to wait for its lit digit. Paused simulation preserves one scan phase; resume before waiting for a different digit. Multiplexed displays illuminate in successive phases, so capture each digit separately. Each image returns `capture_mode: instantaneous`, `display_states` and simulation status; frames are not accumulated into a simultaneous display.
+`native_interactive_status(include_displays: true)` reads `SEVEN_SEG_COM_A/K` and `DCD_HEX` display segments (`abcdefg`) and decoded digits, LED `lit`/`state`, and `PROBE_DIG` levels (`0`, `1`, or `null` for unconnected probes). `native_export_interactive_image` captures these states and the circuit together. Set `active_component` to wait for a decoded digit on a numeric display, or select an LED or probe for a stable captured state. A paused simulation preserves one scan phase. Resume before capturing a different phase.
 
-`native_interactive_status(include_displays: true)` 读取原生 `SEVEN_SEG_COM_A` 的段状态，顺序为 `abcdefg`。`native_export_interactive_image` 通过原生位图引擎导出实际显示状态和电路；`active_component` 可指定要等待点亮的数码管。暂停会保留某个位选阶段，等待另一位前先恢复仿真。动态扫描电路逐位点亮，应分别截取各位。每张图片返回 `capture_mode: instantaneous`、`display_states` 和仿真状态。
+`native_interactive_status(include_displays: true)` 读取 `SEVEN_SEG_COM_A/K`、`DCD_HEX` 的段状态（`abcdefg`）和解码值，以及 LED 的 `lit`/`state` 和 `PROBE_DIG` 的逻辑电平（`0`、`1`，未接线为 `null`）。`native_export_interactive_image` 同时捕获电路和这些状态。`active_component` 可等待指定数码管显示有效数字，也可指定 LED 或探针以捕获其稳定状态。暂停会保留当前扫描相位，截取另一个相位前先恢复仿真。
 
 See [persistence ownership](persistence.md) for advanced native settings, source saves, application preferences and external-only capabilities.
 
-Ordinary editing uses native_open_circuit on the actual source and native_create_circuit in the task workspace. Native save/close defaults update that document; recovery files are internal. Native interactive configuration defaults to persist:true. Explicit copy mode is for comparisons only. See [file editing defaults](persistence.md#file-editing-defaults-051).
+Ordinary editing uses native_open_circuit on the actual source and native_create_circuit in the task workspace. Native save/close defaults update that document; recovery files are internal. Native interactive configuration defaults to persist:true. Explicit copy mode is for comparisons only. See [file editing defaults](persistence.md#file-editing-defaults).
 
-`native_get_circuit_state` omits parameter metadata by default; pass `include_parameters:true` for indexed parameters. `native_save_source(verify:false)` and same-path `native_save_copy(verify:false)` skip reopen verification while retaining backups and external-change checks. A failed verified save returns structured `differences` with field paths and missing/changed content, plus a diagnostic file path.
+`native_get_circuit_state` omits parameter metadata and net names by default; pass `include_parameters:true` for indexed parameters or `include_nets:true` for wire net names and pin SPICE vectors. A topology refresh can change object IDs. When a connectivity or signal query returns `handles_invalidated: true`, apply its `id_map` to retained IDs. `native_save_source(verify:false)` and same-path `native_save_copy(verify:false)` skip reopen verification while retaining backups and external-change checks. A failed verified save returns structured `differences` with field paths and missing/changed content, plus a diagnostic file path.
+
+`native_run_dc_sweep` sweeps an independent voltage or current source and exports RAW/CSV results. `native_plot_waveform` writes SVG or PNG, with `overlay: true` for same-unit traces or `reference` for a dual-panel AC Bode plot. `native_measure_waveform` and `native_verify_waveform` accept `{component_ref, pin}` for `signal` and `reference` while the circuit that generated the RAW is open.
 
 Hidden CMOS/TTL bridge power nodes are checked in generated SPICE. `native_check_netlist` adds structured `diagnostics` for missing external rail connections or provably floating DC rail networks, naming the rail and dependent components. A plain ground does not automatically define VSS. The native VSS power source defaults to 0 V and defines that global rail without an extra ground wire. Connect the appropriate global power symbols/net labels to the intended supply. Numeric analysis stops at `power-rail-preflight` for these missing connections, before starting the native solver. Floating DC-network warnings remain advisory for transient circuits with initial conditions; numeric results retain them in `diagnostics`.
 

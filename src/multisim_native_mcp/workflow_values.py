@@ -5,7 +5,7 @@ import math
 def reference_roots(value):
     if isinstance(value,list):return set().union(*(reference_roots(v) for v in value)) if value else set()
     if not isinstance(value,dict):return set()
-    if set(value)=={'$ref'}:return {value['$ref'].split('.')[0]}
+    if set(value)=={'$ref'}:return {value['$ref'].split('.')[0]} if isinstance(value['$ref'],str) and value['$ref'] else set()
     return set().union(*(reference_roots(v) for v in value.values())) if value else set()
 
 

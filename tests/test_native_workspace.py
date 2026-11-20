@@ -30,7 +30,8 @@ def test_workspace_create_edit_close_save_and_direct_reopen(tmp_path):
     finally:host.close()
 
 
-def test_workspace_filename_collisions_and_attach_matching_open_source(tmp_path):
+def test_workspace_filename_collisions_and_attach_matching_open_source(tmp_path,monkeypatch):
+    monkeypatch.chdir(tmp_path)
     owner=EditorService();client=EditorService()
     try:
         owner.create('Circuit');path=owner.source;owner.finish()

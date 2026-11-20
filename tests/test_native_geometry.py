@@ -11,7 +11,7 @@ pytestmark=pytest.mark.native
 def test_legacy_grid_graphics_repair_history_and_round_trip(tmp_path):
     h=EditorService()
     try:
-        h.create('Connector geometry')
+        h.create('Connector geometry',str(tmp_path/'connector-geometry.ms14'))
         for name,ref,x,y in [('DC_POWER','V1',108,108),('CAPACITOR_VIRTUAL','C1',360,108),('GROUND','0',108,306)]:
             h.edit('place',{'name':name,'ref':ref,'x':x,'y':y,'anchor':'pin','pin':'1'})
         for a,ap,b,bp in [('V1','1','C1','1'),('C1','2','0','1'),('V1','2','0','1')]:

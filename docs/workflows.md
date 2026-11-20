@@ -11,7 +11,7 @@ Use the complete [12 V divider request](../skills/multisim-native/assets/workflo
 ## Execution / 执行
 
 - `native_prepare_components`: prepare several unknown library types together; return exact pins and parameter descriptors. The drawing is restored after probing and metadata is cached for the session.
-- `native_run_workflow`: submit a typed `plan` and wait for the requested duration (30 seconds by default). Stages include session, preparation, wiring, editing, layout, analysis/acceptance, waveform verification, display decoding, saving, exporting and interactive captures.
+- `native_run_workflow`: submit a typed `plan` and wait for the requested duration (30 seconds by default). Stages include session, sheet selection (`select_sheet`), preparation, wiring, editing, layout, analysis/acceptance, waveform verification, display decoding, saving, exporting and interactive captures.
 - `native_workflow_status`: wait for completion or a decision boundary. Use a nonzero `wait_timeout` for ongoing work. Default results contain key measurements and files; `detail: true` reads full stored diagnostics and bindings.
 - `native_control_workflow`: cancel or explicitly resume an unfinished workflow, optionally replacing the remaining stages.
 - `native_session_changes`: obtain a revision and full/incremental state. Pass the revision as the plan's `expected_revision` to reject stale input.
@@ -40,7 +40,7 @@ Set `persist: true` on an `interactive` stage to write its steps and pacing into
 
 `stats.external_calls` 统计工作流 API 调用次数，`native_calls`、`native_seconds` 统计原生主机 RPC。模型推理轮次需由客户端记录。完整字段与示例见 [工作流 skill 参考](../skills/multisim-native/references/workflows.md)。
 
-Version 0.5.1 provides `simulation_settings` (`scope`, `analysis_type`, `changes`, `solver_options`, `expected_revision`) and `sheet_display` (`show_grid`, `show_border`, `show_bounds`) stages. Analysis options accept `persist:true` or `use_saved_settings:true`. A save stage accepts `save_to_source:true` instead of `output_path`, with backup and native reopen verification by default (`verify:false` skips reopen verification). A wiring stage's `persist:true` commits application-wide preferences, separately from the circuit file. See [persistence ownership](persistence.md).
+The workflow engine provides `select_sheet` (`index`, `title` or `sheet_id` for multi-sheet plans), `simulation_settings` (`scope`, `analysis_type`, `changes`, `solver_options`, `expected_revision`) and `sheet_display` (`show_grid`, `show_border`, `show_bounds`) stages. Analysis options support `op`, `tran`, `ac` and `dc` (`dc_source`, `dc_start`, `dc_stop`, `dc_step`), and accept `persist:true` or `use_saved_settings:true` for OP/AC/TRAN. `export` stages and interactive `captures` share image framing options (`dpi`, `scale`, `region`, `fit_content`, `padding`, `show_frame`, `show_grid`). A save stage accepts `save_to_source:true` instead of `output_path`, with backup and native reopen verification by default (`verify:false` skips reopen verification). A wiring stage's `persist:true` commits application-wide preferences, separately from the circuit file. See [persistence ownership](persistence.md).
 
 Normal session open/create now uses actual workspace/source documents. Supply the required absolute output_path for new circuits. A save stage without output_path saves the current document; close also saves pending changes by default. Explicit comparisons alone use isolated_copy:true, with an explicit comparison output_path. Checkpoints and backups remain internal.
 

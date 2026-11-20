@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.3
+
+- Sweep an independent voltage or current source with `native_run_dc_sweep` and export RAW and CSV results.
+- Trace circuit connectivity with `native_get_connectivity` and map pins to waveform vectors with `native_resolve_signal`. Use pin selectors in standalone waveform measurements and verification.
+- Measure transient settling time, signal timing and AC response. Export waveform and Bode plots as SVG or PNG, with overlays for traces that share units.
+- Read hexadecimal displays, LED states and digital probe levels during interactive simulation. Capture hexadecimal digits in workflows.
+- Filter the component library by manufacturer and availability of a simulation model. Set named parameters when placing or editing components, including supported potentiometers.
+- Fit schematic contents to the sheet, plan wire routes around components and select sheets in multi-sheet workflows. Keep reference labels in sync with component edits and distinguish net labels from electrical connections when editing wires.
+- Install directly into Antigravity and standard JSON MCP clients. Manage older environments and expired session files with the `cleanup` command.
+
 ## 0.5.2
 
 - Release completed numeric simulation sessions before interactive starts, and apply the requested wait timeout to cleanup as well as the start transition.

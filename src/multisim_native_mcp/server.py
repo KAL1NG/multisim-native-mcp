@@ -13,7 +13,8 @@ from .service import EditorService,NativeEditError,NativeSaveError
 from mcp.types import CallToolResult,TextContent
 from .jobs import ExperimentManager
 from . import __version__
-from .contracts import MeasurementRequest,AcceptanceCriterion,normalize_measurements,normalize_criteria
+from .contracts import (AcceptanceCriterion, CircuitMeasurementRequest, MeasurementRequest,
+                        normalize_criteria, normalize_requests)
 from .workflow_contracts import ComponentRequest,WorkflowPlan,WorkflowStage
 from .workflows import WorkflowManager,NeedsInput
 from .settings import SimulationSettingChange,Scalar
@@ -31,12 +32,12 @@ def checked(function):
         try:
             if workflows.active and function.__name__ not in {
                 'native_runtime_status','native_workflow_status','native_control_workflow',
-                'native_read_waveform','native_measure_waveform','native_verify_waveform','native_decode_seven_segment'}:
+                'native_read_waveform','native_measure_waveform','native_verify_waveform','native_decode_seven_segment','native_plot_waveform'}:
                 raise RuntimeError('A workflow is running; wait with native_workflow_status or cancel it')
             if experiments.active and function.__name__ not in {
                 'native_runtime_status','native_experiment_status','native_list_experiments','native_cancel_experiment',
                 'native_workflow_status',
-                'native_read_waveform','native_measure_waveform','native_verify_waveform','native_decode_seven_segment'}:
+                'native_read_waveform','native_measure_waveform','native_verify_waveform','native_decode_seven_segment','native_plot_waveform'}:
                 raise RuntimeError('A native experiment is running; inspect or cancel it first')
             result=function(*args, **kwargs)
             options=signature.bind(*args,**kwargs).arguments
@@ -158,9 +159,23 @@ def native_list_components() -> dict:
 
 @server.tool()
 @checked
-def native_get_circuit_state(include_parameters: bool = False) -> dict:
-    """Read page bounds in sheet units, content bounds, components, named pins, wires and free text in texts (current IDs, content, insertion coordinates, transforms and bounds). Parameter metadata is omitted by default; include_parameters=true requests it. Origin is top-left; 96 sheet units per inch. Paper dimensions are separate from sheet dimensions."""
-    return host.call('circuitState',{'include_parameters':include_parameters})
+def native_get_circuit_state(include_parameters: bool = False, include_nets: bool = False) -> dict:
+    """Read page bounds in sheet units, content bounds, components, named pins, wires and free text in texts (current IDs, content, insertion coordinates, transforms and bounds). Parameter metadata is omitted by default; include_parameters=true requests it. include_nets=true attaches wire net names and pin SPICE signal names. Origin is top-left; 96 sheet units per inch. Paper dimensions are separate from sheet dimensions."""
+    return host.get_circuit_state(include_parameters, include_nets)
+
+
+@server.tool()
+@checked
+def native_get_connectivity() -> dict:
+    """Return electrical net and node mappings for all wires and component pins on the selected sheet. A topology refresh returns handles_invalidated and id_map for retained IDs."""
+    return host.get_connectivity()
+
+
+@server.tool()
+@checked
+def native_resolve_signal(component_ref: str, pin: str) -> dict:
+    """Resolve a component pin to its SPICE waveform vector name (for example V(...)). Use a component ID when power symbols share a reference. A topology refresh returns handles_invalidated and id_map for retained IDs."""
+    return host.resolve_signal(component_ref, pin)
 
 
 @server.tool()
@@ -267,19 +282,22 @@ def native_create_circuit(output_path: str,title: str = 'Circuit') -> dict:
 
 @server.tool()
 @checked
-def native_search_library(query: str, limit: int | None = 20, family: str = '', group: str = '') -> dict:
-    """Search native component names and IDs with actual family/group categories. Optional family/group filters use exact names; library names alone do not identify symbol or model type."""
+def native_search_library(query: str, limit: int | None = 20, family: str = '', group: str = '',
+        manufacturer: str = '', simulatable_only: bool = False) -> dict:
+    """Search native component names and IDs with family, group, manufacturer and simulatable metadata. Optional family, group and manufacturer filters use exact names; simulatable_only excludes non-simulatable models."""
     if limit is not None and limit<1: raise ValueError('Invalid search size')
-    return host.call('librarySearch', {'query':query,'limit':limit,'family':family,'group':group})
+    return host.call('librarySearch', {'query':query,'limit':limit,'family':family,'group':group,
+        'manufacturer':manufacturer,'simulatable_only':simulatable_only})
 
 
 @server.tool()
 @checked
-def native_place_component(name: str, x: int, y: int, reference: str | None = None, family: str = '', group: str = '', manufacturer: str = '',parameters: list[dict] | None = None,anchor: Literal['origin','center','pin'] = 'origin',pin: str | None = None,include_parameters: bool = False,angle: float | None = None,mirror_axis: Literal['horizontal','vertical'] | None = None,value: float | str | None = None,expression: str | None = None) -> dict:
-    """Place a real library component. Inline angle rotates clockwise in sheet coordinates, then mirror_axis reverses x (horizontal) or y (vertical), then the final origin/center/named-pin anchor is positioned. value or expression selects the unique primary value; numeric placement values use compact SI expressions. Duplicate default power refs use native identity with a warning; bind IDs for repeated symbols. Returns final pins, labels and anchor offsets; grid snapping applies."""
+def native_place_component(name: str, x: int, y: int, reference: str | None = None, family: str = '', group: str = '', manufacturer: str = '',parameters: list[dict] | None = None,anchor: Literal['origin','center','pin'] = 'origin',pin: str | None = None,include_parameters: bool = False,angle: float | None = None,mirror_axis: Literal['horizontal','vertical'] | None = None,value: float | str | None = None,expression: str | None = None,params: dict[str, float | str] | None = None) -> dict:
+    """Place a real library component. Inline angle rotates clockwise in sheet coordinates, then mirror_axis reverses x (horizontal) or y (vertical), then the final origin/center/named-pin anchor is positioned. value or expression selects the unique primary value, and params sets named parameters by descriptor name; numeric placement values use compact SI expressions. Duplicate default power refs use native identity with a warning; bind IDs for repeated symbols. Returns final pins, labels and anchor offsets; grid snapping applies."""
     args={'name':name,'x':x,'y':y,'family':family,'group':group,'manufacturer':manufacturer,'anchor':anchor}
     if pin is not None:args['pin']=pin
     if parameters is not None:args['parameters']=parameters
+    if params is not None:args['params']=params
     if reference is not None: args['ref']=reference
     for key,item in {'angle':angle,'mirror_axis':mirror_axis,'value':value,'expression':expression}.items():
         if item is not None:args[key]=item
@@ -310,10 +328,15 @@ def native_get_parameters(component_ref: str) -> dict:
 
 @server.tool()
 @checked
-def native_set_parameter(component_ref: str, index: int, value: float | None = None, expression: str | None = None) -> dict:
-    """Set one existing native parameter by index, using either a finite numeric value or a SPICE expression."""
+def native_set_parameter(component_ref: str, index: int | None = None, value: float | None = None,
+        expression: str | None = None, name: str | None = None, role: str | None = None) -> dict:
+    """Set one existing native parameter by index, name or role (defaulting to the unique value slot when omitted), using either a finite numeric value or a SPICE expression."""
     if (value is None)==(expression is None): raise ValueError('Provide exactly one value or expression')
-    return host.edit('setParameter',{'ref':component_ref,'index':index,**({'value':value} if value is not None else {'expression':expression})})
+    args={'ref':component_ref,**({'value':value} if value is not None else {'expression':expression})}
+    if index is not None: args['index']=index
+    if name is not None: args['name']=name
+    if role is not None: args['role']=role
+    return host.edit('setParameter',args)
 
 
 @server.tool()
@@ -461,6 +484,13 @@ def native_update_sheet(title: str | None = None, page: str | None = None, width
 
 @server.tool()
 @checked
+def native_fit_sheet(margin: int = 36, resize: bool = True) -> dict:
+    """Shift negative or off-page sheet contents inward by a grid-aligned offset with margin, and optionally resize the sheet in one undoable edit."""
+    return host.fit_sheet(margin, resize)
+
+
+@server.tool()
+@checked
 def native_create_subcircuit(title: str, reference: str, x: int, y: int) -> dict:
     """Create a native embedded child schematic and its editable parent macro symbol. Add ports on the child sheet before connecting the parent pins."""
     return host.edit('createSubcircuit',{'title':title,'ref':reference,'x':x,'y':y})
@@ -534,6 +564,13 @@ def native_run_ac_sweep(sweep: str = 'dec', points: int = 20, start_hz: float = 
 
 @server.tool()
 @checked
+def native_run_dc_sweep(source: str, start: float, stop: float, step: float) -> dict:
+    """Run a native DC transfer sweep on an independent voltage or current source and export RAW and CSV artifacts."""
+    return host.run_dc_sweep(source, start, stop, step)
+
+
+@server.tool()
+@checked
 def native_start_analysis(analysis: str = 'tran', step: float = 0.00001, stop: float = 0.01, use_initial_conditions: bool = False,
     persist: bool = False, save_to_source: bool = False, use_saved_settings: bool = False) -> dict:
     """Start background native analysis with pause/resume/stop/status. persist=true retains explicit run arguments in native document settings; save_to_source=true additionally backs up and verify-saves the source before running. use_saved_settings=true executes stored analysis and native-compiled solver options instead. Results remain external artifacts."""
@@ -550,7 +587,7 @@ def native_analysis_status() -> dict:
 @server.tool()
 @checked
 def native_interactive_status(include_displays: bool = False) -> dict:
-    """Read actual native interactive simulation state, errors and simulated time from the native status bar. Separate from numeric analysis jobs."""
+    """Read native interactive simulation state, errors, and elapsed simulation time. include_displays also reads seven-segment and hexadecimal displays, LEDs, and digital probes."""
     return host.interactive_status(include_displays)
 
 
@@ -576,7 +613,7 @@ def native_export_interactive_image(output_path: str, overwrite: bool = False, d
     scale: float = 1.0, region: dict[str,int] | None = None, fit_content: bool = False,
     padding: int = 18, show_frame: bool = False, show_grid: bool = False,
     active_component: str | None = None, wait_timeout: float | None = None) -> dict:
-    """Capture the actual instantaneous native interactive display state as PNG/BMP. Optionally wait for active_component (SEVEN_SEG_COM_A) to show a stable decoded digit, useful for multiplexed scans. Capture and readout occur in one UI-thread operation; no segment states are synthesized or accumulated. Returns native segment states and simulation time. Pause preserves the current phase; resume to capture another phase."""
+    """Capture a native interactive PNG/BMP and instantaneous display_states. Read seven-segment and DCD_HEX segments/decoded digits, LED lit/state, and PROBE_DIG levels. active_component selects a supported indicator and waits for a decoded digit on numeric displays. Capture and readout occur in one native UI-thread operation. Pause preserves the current phase."""
     return host.export_interactive_image(output_path,overwrite,dpi,scale,region,fit_content,padding,show_frame,show_grid,active_component,wait_timeout)
 
 
@@ -594,27 +631,66 @@ def native_read_waveform(raw_path: str, offset: int = 0, limit: int = 1000, plot
     return host.read_waveform(raw_path,offset,limit,plot_index)
 
 
+def _resolve_measurement_pins(requests):
+    selectors = [(request, field) for request in requests for field in ('signal', 'reference')
+                 if isinstance(request.get(field), dict)]
+    if not selectors:
+        return {}
+    job = host.analysis_job
+    if workflows.active or experiments.active or (job and job['status'] in ('running', 'pause_requested', 'stop_requested')):
+        raise RuntimeError('Pin selectors require an idle circuit session. Use vector names to measure a saved RAW during a job.')
+    with host.lock:
+        if not host.agent:
+            raise ValueError('Open the circuit used to generate this RAW file before measuring by pin, or use vector names.')
+        identity = {}
+        for request, field in selectors:
+            selector = request[field]
+            ref = selector['component_ref']
+            if ref in identity.get('unresolved_ids', []):
+                raise ValueError(f'Component ID {ref} could not be rebound after topology refresh. Use a current ID or a unique reference.')
+            ref = identity.get('id_map', {}).get(ref, ref)
+            result = host.resolve_signal(ref, selector['pin'])
+            request[field] = result['signal']
+            if result.get('handles_invalidated'):
+                identity = {key: result[key] for key in ('handles_invalidated', 'handle_generation', 'id_map', 'unresolved_ids') if key in result}
+        return identity
+
+
 @server.tool()
 @checked
-def native_measure_waveform(raw_path: str, measurements: list[MeasurementRequest]) -> dict:
-    """Measure native RAW samples. Each request has id, metric, signal; optional start/stop, threshold. Metrics: min, max, mean, rms, peak_to_peak, frequency, duty_cycle; AC gain_db/phase_deg need reference and frequency_hz."""
+def native_measure_waveform(raw_path: str, measurements: list[CircuitMeasurementRequest]) -> dict:
+    """Measure RAW samples by vector name or {component_ref, pin} on the open circuit that generated the RAW. Real/time metrics include min, max, mean, rms, peak_to_peak, frequency, duty_cycle, period, rise_time, fall_time, overshoot, settling_time, and value_at. Settling time uses tolerance (default 0.02 of step size) and optional final_value. AC metrics are gain_db, phase_deg, magnitude, bandwidth_3db, and phase_margin."""
     from .waveforms import parse_raw
     from .measurements import measure
-    measurements=normalize_measurements(measurements)
-    return {'raw_path':raw_path,'measurements':measure(parse_raw(Path(raw_path)),measurements)}
+    measurements=normalize_requests(measurements,CircuitMeasurementRequest,'measurements')
+    data = parse_raw(Path(raw_path))
+    identity = _resolve_measurement_pins(measurements)
+    return {'raw_path':raw_path,'measurements':measure(data,measurements),**identity}
 
 
 @server.tool()
 @checked
-def native_verify_waveform(raw_path: str, measurements: list[MeasurementRequest], criteria: list[AcceptanceCriterion]) -> dict:
-    """Measure RAW data and check criteria using the same id field as measurements. The legacy criterion key measurement is accepted. Specify min/max or target plus absolute_tolerance/relative_tolerance; malformed requests fail before reading the waveform."""
+def native_verify_waveform(raw_path: str, measurements: list[CircuitMeasurementRequest], criteria: list[AcceptanceCriterion]) -> dict:
+    """Measure RAW data and check criteria by measurement id (legacy key measurement also accepted). Signal and reference accept vector names or {component_ref, pin} on the open circuit that generated the RAW. Supports the same metrics as native_measure_waveform, including settling_time. Specify min, max, or target with optional tolerances."""
     from .waveforms import parse_raw
     from .measurements import measure
     from .verification import verify
-    measurements=normalize_measurements(measurements)
+    measurements=normalize_requests(measurements,CircuitMeasurementRequest,'measurements')
     criteria=normalize_criteria(criteria,{m['id'] for m in measurements})
-    values=measure(parse_raw(Path(raw_path)),measurements)
-    return {'raw_path':raw_path,'measurements':values,**verify(values,criteria)}
+    data = parse_raw(Path(raw_path))
+    identity = _resolve_measurement_pins(measurements)
+    values=measure(data,measurements)
+    return {'raw_path':raw_path,'measurements':values,**verify(values,criteria),**identity}
+
+
+@server.tool()
+@checked
+def native_plot_waveform(raw_path: str, output_path: str, signals: list[str] | None = None,
+        reference: str | None = None, title: str | None = None, overwrite: bool = False,
+        plot_index: int = 0, overlay: bool = False) -> dict:
+    """Render a waveform to SVG or PNG based on output_path. overlay=true superimposes same-unit signals; reference produces a dual-panel AC Bode plot."""
+    from .reports import export_waveform_plot
+    return export_waveform_plot(raw_path, output_path, signals, reference, title, overwrite, plot_index, overlay)
 
 
 @server.tool()
@@ -699,11 +775,7 @@ def native_check_layout() -> dict:
 @checked
 def native_plan_wire_route(wire_id: str, clearance: int = 9) -> dict:
     """Plan an orthogonal wire path around native component bounds. Return points without editing; preserve actual electrical connector endpoints."""
-    from .layout import plan_wire
-    with host.lock:
-        wire=next((w for w in host.call('wires')['wires'] if w['id']==wire_id),None)
-        if not wire:raise ValueError('Wire not found')
-        return plan_wire(host.call('componentBounds')['components'],wire,clearance)
+    return host.plan_wire_route(wire_id, clearance)
 
 
 @server.tool()
@@ -713,7 +785,7 @@ def native_auto_route_wire(wire_id: str, clearance: int = 9, engine: Literal['na
     if engine not in ('native','obstacle'):raise ValueError('Choose routing engine native or obstacle')
     if engine=='native':return host.edit('autoWire',{'id':wire_id})
     with host.lock:
-        plan=native_plan_wire_route(wire_id,clearance)
+        plan=host.plan_wire_route(wire_id,clearance)
         result=host.edit('route',{'id':wire_id,'points':plan['points']})
         return {**plan,'wire':result,'routing_engine':'obstacle'}
 

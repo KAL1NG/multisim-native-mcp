@@ -31,9 +31,17 @@ Image.MAX_IMAGE_PIXELS = None
 MUTATIONS = {'wire','move','moveLabel','place','copy','remove','transform','route','setParameter','setModelText',
              'rename','addText','updateText','deleteText','updateSheet','moveJunction','updatePort','labelWire','splitWire','connectEndpoint','reconnect',
              'replace','createSheet','createSubcircuit','createPort','sheetTitle','sheetSize','repairWireGeometry',
-             'autoWire','connectTouching'}
+             'autoWire','connectTouching','fitSheet','translateSheet'}
 TOPOLOGY_MUTATIONS={'wire','place','copy','remove','connectEndpoint','reconnect','replace','splitWire',
-                    'createSheet','createSubcircuit','createPort','updatePort','rename','connectTouching'}
+                    'createSheet','createSubcircuit','createPort','updatePort','rename','connectTouching','labelWire'}
+
+
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_finite_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def changes_topology(operation,result):
@@ -166,8 +174,11 @@ class EditorService(NativeHost):
 
     def save_copy(self,output_path,overwrite=False,allow_off_page=False,verify=True):
         if not isinstance(allow_off_page,bool) or not isinstance(verify,bool):raise ValueError('allow_off_page and verify must be boolean')
+        raw_path=Path(output_path)
+        if not raw_path.is_absolute() or raw_path.suffix.lower()!='.ms14':
+            raise ValueError('output_path must be an absolute .ms14 path')
         with self.lock:
-            if self.source and not self.isolated and Path(output_path).resolve()==self.source:
+            if self.source and not self.isolated and raw_path.resolve()==self.source:
                 return self.save_source(allow_off_page,**({'verify':False} if not verify else {}))
             job=self.analysis_job
             if job and job['status'] in ('running','pause_requested','stop_requested'):
@@ -237,7 +248,8 @@ class EditorService(NativeHost):
                     'source_unchanged':False,'saved_to_source':True}
         except Exception:
             if replaced:shutil.copy2(backup,source)
-            self.call('setProjectPath',{'path':original_path})
+            try:self.call('setProjectPath',{'path':original_path})
+            except Exception:pass
             raise
         finally:
             self._saving_source=False;staged.unlink(missing_ok=True)
@@ -263,6 +275,8 @@ class EditorService(NativeHost):
         with self.lock:
             saved=None
             if save_changes and self.agent and self.call('inspect')['modified']:
+                if not self.isolated and not self.source and (not self.owned or getattr(self.save_current,'__func__',None) is EditorService.save_current):
+                    raise ValueError('This attached circuit has never been saved to disk; save it first with native_save_copy(output_path) or detach without saving via native_close_copy(save_changes=False)')
                 if self.interactive_status()['state_name'] in ('running','paused'):self.control_interactive('stop',15)
                 saved=self.save_current()
             result=self.close()
@@ -380,20 +394,34 @@ class EditorService(NativeHost):
                 'document':self.document_context()}
 
     def restore(self, checkpoint):
-        try:
-            result=self.call('restoreSnapshot',checkpoint)
-        except Exception:
-            if not self.owned: raise
-            source,digest,working,isolated,undo,redo=self.source,self.source_hash,self.working,self.isolated,self.undo_stack,self.redo_stack
-            self.close()
-            NativeHost.open_circuit(self,checkpoint['path'])
-            self.source,self.source_hash,self.undo_stack,self.redo_stack=source,digest,undo,redo
-            self.working,self.isolated=working,isolated
-            result=self.call('restoreSnapshot',checkpoint)
-            result['host_restarted']=True
+        # Multisim can retain a native SPICE session tied to the old graph after numeric export.
+        if self.owned and self.numeric_session_used:
+            result = self._restart_from_checkpoint(checkpoint)
+        else:
+            try:
+                result = self.call('restoreSnapshot', checkpoint)
+            except Exception:
+                if not self.owned:
+                    raise
+                result = self._restart_from_checkpoint(checkpoint)
         self.topology_dirty=False
         self.handle_generation += 1
         return result
+
+    def _restart_from_checkpoint(self, checkpoint):
+        source,digest,working,working_digest,session_dir,isolated,undo,redo=(
+            self.source,self.source_hash,self.working,self.working_hash,
+            self.session_dir,self.isolated,self.undo_stack,self.redo_stack)
+        self.close()
+        NativeHost.open_circuit(self,checkpoint['path'])
+        new_session_dir=self.session_dir
+        self.source,self.source_hash,self.undo_stack,self.redo_stack=source,digest,undo,redo
+        self.working,self.working_hash,self.isolated=working,working_digest,isolated
+        if session_dir is not None:
+            self.session_dir=session_dir
+            if new_session_dir and new_session_dir!=session_dir:
+                shutil.rmtree(new_session_dir,ignore_errors=True)
+        return {**self.call('restoreSnapshot',checkpoint),'host_restarted':True}
 
     def edit(self, operation, args=None):
         batch=self.batch([{'operation':operation,'arguments':args or {}}])
@@ -402,13 +430,53 @@ class EditorService(NativeHost):
             value={**value,**{k:batch[k] for k in ('handles_invalidated','handle_generation','id_map','unresolved_ids','state') if k in batch}}
         return value
 
+    def plan_wire_route(self, wire_id: str, clearance: int = 9) -> dict:
+        if not isinstance(wire_id,str) or not wire_id or '\0' in wire_id:
+            raise ValueError('Provide a current wire ID')
+        if not _is_int(clearance) or clearance<0:
+            raise ValueError('Clearance must be nonnegative')
+        from .layout import plan_wire
+        with self.lock:
+            wire=next((w for w in self.call('wires')['wires'] if w['id']==wire_id),None)
+            if not wire:raise ValueError('Wire not found')
+            return plan_wire(self.call('componentBounds')['components'],wire,clearance)
+
+    def _refresh_signal_names(self) -> dict:
+        if not self.topology_dirty:
+            return {}
+        result = self.netlist()
+        return {key: result[key] for key in ('handles_invalidated', 'handle_generation', 'id_map', 'unresolved_ids') if key in result}
+
+    def get_circuit_state(self, include_parameters: bool = False, include_nets: bool = False) -> dict:
+        with self.lock:
+            identity = self._refresh_signal_names() if include_nets else {}
+            return {**self.call('circuitState', {'include_parameters': include_parameters, 'include_nets': include_nets}), **identity}
+
+    def get_connectivity(self) -> dict:
+        with self.lock:
+            identity = self._refresh_signal_names()
+            return {**self.call('connectivity'), **identity}
+
+    def resolve_signal(self, component_ref: str, pin: str) -> dict:
+        if not isinstance(component_ref,str) or not component_ref.strip() or '\0' in component_ref:
+            raise ValueError('Provide a nonempty component_ref')
+        if not isinstance(pin,str) or not pin.strip() or '\0' in pin:
+            raise ValueError('Provide a nonempty pin name')
+        with self.lock:
+            identity = self._refresh_signal_names()
+            ref = identity.get('id_map', {}).get(component_ref, component_ref)
+            return {**self.call('signalForPin', {'ref': ref, 'pin': pin}), **identity}
+
+    def fit_sheet(self, margin: int = 36, resize: bool = True) -> dict:
+        return self.edit('fitSheet',{'margin':margin,'resize':resize})
+
     def edit_sequence(self, operations, bindings, cancel=None):
         """One checkpoint for a phase; bounded UI-thread slices resolve intermediate results."""
         from .workflow_values import resolve,reference_roots
         operations=[self.normalize_edit(op) for op in operations]
         packed={'place','move','alignPin','moveLabel','transform','wire','connectEndpoint','route','autoWire',
                 'setParameter','addText','updateText','deleteText','updateSheet','moveJunction','updatePort','labelWire','splitWire','rename','remove','connectTouching',
-                'sheetSize','sheetTitle','repairWireGeometry'}
+                'sheetSize','sheetTitle','repairWireGeometry','fitSheet','translateSheet'}
         with self.lock:
             if self.call('simulationInfo')['state'] in (1,2):
                 raise RuntimeError('Stop interactive simulation before editing')
@@ -492,12 +560,25 @@ class EditorService(NativeHost):
                     # Reopen its native checkpoint first when prior edits changed that graph.
                     if op['operation']=='replace' and self.topology_dirty:
                         args=dict(op.get('arguments',{}))
-                        args['ref']=next(c['ref'] for c in self.call('components')['components'] if args['ref'] in (c['ref'],c['local_ref'],c['id']))
+                        target=args.get('ref')
+                        components=self.call('components')['components']
+                        matches=[c for c in components if target in (c['ref'],c['id'])] or [c for c in components if target==c.get('local_ref')]
+                        if len(matches)!=1:
+                            raise ValueError(f'Component {target!r} must identify one component on the selected sheet; found {len(matches)}')
+                        target_id=matches[0]['id'];target_ref=matches[0]['ref']
+                        shared_ref=sum(1 for c in components if c['ref']==target_ref)>1
                         old_state=self.call('circuitState',{'include_parameters':True})
                         self.restore(self.checkpoint())
                         new_state=self.call('circuitState',{'include_parameters':True})
                         from .workflows import remap_bindings
                         before_refresh={**old_state,'handle_epoch':'before'};after_refresh={**new_state,'handle_epoch':'after'}
+                        remapped_target=remap_bindings(target_id,before_refresh,after_refresh)
+                        if isinstance(remapped_target,str):
+                            args['ref']=remapped_target
+                        elif not shared_ref:
+                            args['ref']=target_ref
+                        else:
+                            raise RuntimeError(f'Component {target!r} could not be uniquely rebound after topology refresh')
                         results=remap_bindings(results,before_refresh,after_refresh)
                         operations[index+1:]=remap_bindings(operations[index+1:],before_refresh,after_refresh)
                     else:args=op.get('arguments',{})
@@ -505,16 +586,37 @@ class EditorService(NativeHost):
                     self.topology_dirty=self.topology_dirty or changes_topology(op['operation'],results[-1])
                 self.call('markModified')
                 if any(op['operation']=='createSubcircuit' for op in operations):
+                    subcircuit_sheet_indices=[
+                        next((s.get('index') for s in res.get('sheets',[]) if s.get('id')==res.get('sheet_id')),None)
+                        if op['operation']=='createSubcircuit' and isinstance(res,dict) else None
+                        for op,res in zip(operations,results)
+                    ]
                     old_state=self.call('circuitState',{'include_parameters':True})
                     self.restore(self.checkpoint())
                     new_state=self.call('circuitState',{'include_parameters':True})
                     from .workflows import remap_bindings
                     results=remap_bindings(results,{**old_state,'handle_epoch':'before'},{**new_state,'handle_epoch':'after'})
-                    for op,result in zip(operations,results):
+                    refreshed_components=self.call('components')['components'];refreshed_sheets=self.call('sheets')
+                    for op,result,sheet_index in zip(operations,results,subcircuit_sheet_indices):
                         if op['operation']=='createSubcircuit':
-                            result['components']=self.call('components')['components'];result['sheets']=self.call('sheets')
-                            result['symbol_id']=next(c['id'] for c in result['components'] if c['ref']==op['arguments'].get('ref',op['arguments']['title']))
-                            result['sheet_id']=next(s['id'] for s in result['sheets'] if s['title']==op['arguments']['title'])
+                            result['components']=refreshed_components;result['sheets']=refreshed_sheets
+                            expected_ref=op['arguments'].get('ref') or op['arguments']['title']
+                            remapped_symbol=result.get('symbol_id')
+                            if isinstance(remapped_symbol,str) and any(c['id']==remapped_symbol for c in refreshed_components):
+                                result['symbol_id']=remapped_symbol
+                            else:
+                                symbol_matches=[c['id'] for c in refreshed_components if expected_ref in (c['ref'],c.get('local_ref'))]
+                                if not symbol_matches:
+                                    raise RuntimeError(f'Created subcircuit symbol {expected_ref!r} not found after refresh')
+                                result['symbol_id']=symbol_matches[-1]
+                            sheet_match=(next((s['id'] for s in refreshed_sheets if s.get('index')==sheet_index),None)
+                                         if sheet_index is not None else None)
+                            if sheet_match is None:
+                                title_matches=[s['id'] for s in refreshed_sheets if s.get('title')==op['arguments']['title']]
+                                if not title_matches:
+                                    raise RuntimeError(f"Created subcircuit sheet {op['arguments']['title']!r} not found after refresh")
+                                sheet_match=title_matches[-1]
+                            result['sheet_id']=sheet_match
                             result.pop('block',None);result['handles_invalidated']=True
             except Exception as error:
                 try: self.restore(before if atomic else step_before)
@@ -548,15 +650,26 @@ class EditorService(NativeHost):
 
     @staticmethod
     def validate(op,args):
-        required={'addText':('text','x','y'),'updateText':('id',),'deleteText':('id',),'moveJunction':('id','x','y'),'updatePort':('id',)}
+        required={'addText':('text','x','y'),'updateText':('id',),'deleteText':('id',),'moveJunction':('id','x','y'),
+                  'updatePort':('id',),'labelWire':('name',),'translateSheet':('dx','dy')}
         for key in required.get(op,()):
             if key not in args:raise ValueError(op+' requires '+key)
         for name,fields in [('updateText',('text','x','y')),('updateSheet',('title','page','width','height')),('updatePort',('name','x','y'))]:
             if op==name and not any(k in args for k in fields):raise ValueError(name+' requires '+', '.join(fields))
         if op in ('updateText','deleteText','moveJunction','updatePort') and (not isinstance(args.get('id'),str) or not args['id'] or '\0' in args['id']):raise ValueError('Provide a current object ID')
+        if op=='labelWire':
+            if 'id' in args and (not isinstance(args.get('id'),str) or not args['id'] or '\0' in args['id']):
+                raise ValueError('Provide a current object ID')
+            if not isinstance(args.get('name'),str) or not args['name'].strip() or '\0' in args['name']:
+                raise ValueError('Wire net name must be a nonempty string')
         if op=='updateSheet':
             for key in ('width','height'):
                 if key in args:EditorService.validate('sheetSize',{'width':args[key],'height':args[key]})
+        if op=='fitSheet':
+            if 'margin' in args and (not _is_int(args['margin']) or not 0<=args['margin']<=2147483647):
+                raise ValueError('margin must be a nonnegative signed 32-bit integer')
+            if 'resize' in args and not isinstance(args['resize'],bool):
+                raise ValueError('resize must be boolean')
         if op=='connectTouching' and 'refs' in args:
             refs=args['refs']
             if not isinstance(refs,list) or not refs or any(not isinstance(ref,str) or not ref for ref in refs):
@@ -564,7 +677,7 @@ class EditorService(NativeHost):
         if op=='place':
             if args.get('anchor','origin') not in ('origin','center','pin'):raise ValueError('Placement anchor must be origin, center or pin')
             if args.get('anchor')=='pin' and not isinstance(args.get('pin'),str):raise ValueError('Placement with anchor=pin requires the exact pin name')
-            if 'angle' in args and (isinstance(args['angle'],bool) or not isinstance(args['angle'],(int,float)) or not math.isfinite(args['angle'])):raise ValueError('Rotation must be finite')
+            if 'angle' in args and not _is_finite_number(args['angle']):raise ValueError('Rotation must be finite')
             if 'mirror_axis' in args and args['mirror_axis'] not in ('horizontal','vertical'):raise ValueError('Invalid mirror axis')
             if 'value' in args and 'expression' in args:raise ValueError('Provide value or expression, not both')
             for key in ('value','expression'):
@@ -572,32 +685,58 @@ class EditorService(NativeHost):
                 value=args[key]
                 if isinstance(value,str):
                     if not value.strip() or '\0' in value:raise ValueError('Invalid placement expression')
-                elif key=='expression' or isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value):raise ValueError('Invalid placement value')
+                elif key=='expression' or not _is_finite_number(value):raise ValueError('Invalid placement value')
         if op=='place' and 'parameters' in args:
             if not isinstance(args['parameters'],list):raise ValueError('Provide a component parameter list')
             for parameter in args['parameters']:
                 if not isinstance(parameter,dict) or (('value' in parameter)==('expression' in parameter)):raise ValueError('Each parameter needs index and exactly one value or expression')
                 EditorService.validate('setParameter',parameter)
-        if op=='sheetSize' and any(not isinstance(args.get(k),int) or not 0<args[k]<=2147483647 for k in ('width','height')):
+        if op=='place' and 'params' in args:
+            if not isinstance(args['params'],dict):raise ValueError('params must be a mapping of parameter names to values or expressions')
+            for param_name,param_value in args['params'].items():
+                if not isinstance(param_name,str) or not param_name.strip() or '\0' in param_name:
+                    raise ValueError('Invalid parameter name in params')
+                if isinstance(param_value,str):
+                    if not param_value.strip() or '\0' in param_value:
+                        raise ValueError('Invalid parameter expression in params')
+                elif not _is_finite_number(param_value):
+                    raise ValueError('Invalid parameter value in params')
+        if op=='sheetSize' and any(not _is_int(args.get(k)) or not 0<args[k]<=2147483647 for k in ('width','height')):
             raise ValueError('Sheet width and height must be positive signed 32-bit integers')
         if op=='sheetSize' and any(round(args[k]/96*25.4*500000)>2147483647 for k in ('width','height')):
             raise ValueError('Sheet dimensions exceed the native signed 32-bit CUTRect work-area format')
         for key in ('x','y','dx','dy'):
-            if key in args and (not isinstance(args[key],int) or not -2147483648<=args[key]<=2147483647):
+            if key in args and (not _is_int(args[key]) or not -2147483648<=args[key]<=2147483647):
                 raise ValueError(key+' must fit a native signed 32-bit integer')
         if op=='setParameter':
-            if not isinstance(args.get('index'),int) or not 0<=args['index']<=2147483647: raise ValueError('Invalid parameter index')
-            if 'value' in args and not math.isfinite(float(args['value'])): raise ValueError('Parameter must be finite')
-        if op=='transform' and 'angle' in args and not math.isfinite(args['angle']):raise ValueError('Rotation must be finite')
-        if op=='transform' and 'angle' not in args and args.get('axis') not in ('horizontal','vertical'): raise ValueError('Invalid mirror axis')
+            if ('value' in args)==('expression' in args):
+                raise ValueError('Provide exactly one value or expression')
+            if 'index' in args and (not _is_int(args['index']) or not 0<=args['index']<=2147483647):
+                raise ValueError('Invalid parameter index')
+            if 'name' in args and (not isinstance(args['name'],str) or not args['name'].strip() or '\0' in args['name']):
+                raise ValueError('Invalid parameter name')
+            if 'role' in args and (not isinstance(args['role'],str) or not args['role'].strip() or '\0' in args['role']):
+                raise ValueError('Invalid parameter role')
+            if 'value' in args and not _is_finite_number(args['value']):
+                raise ValueError('Parameter must be finite')
+            if 'expression' in args and (not isinstance(args['expression'],str) or not args['expression'].strip() or '\0' in args['expression']):
+                raise ValueError('Invalid expression')
+        if op=='transform':
+            if ('angle' in args)==('axis' in args):
+                raise ValueError('transform requires angle or axis, not both')
+            if 'angle' in args and not _is_finite_number(args['angle']):
+                raise ValueError('Rotation must be finite')
+            if 'axis' in args and args.get('axis') not in ('horizontal','vertical'):
+                raise ValueError('Invalid mirror axis')
         if op in ('rename','place','copy','replace'):
             for key in ('ref','new_ref'):
                 if key in args and (not isinstance(args[key],str) or not args[key] or '\0' in args[key]): raise ValueError('Invalid reference')
         if 'points' in args:
             if not isinstance(args['points'],list) or len(args['points'])<2: raise ValueError('Provide at least two route vertices')
             for point in args['points']:
+                if not isinstance(point,dict): raise ValueError('Invalid route coordinate')
                 for key in ('x','y'):
-                    if not isinstance(point.get(key),int) or not -2147483648<=point[key]<=2147483647: raise ValueError('Invalid route coordinate')
+                    if not _is_int(point.get(key)) or not -2147483648<=point[key]<=2147483647: raise ValueError('Invalid route coordinate')
         for key in ('name','text','title','page','family','group','manufacturer','expression'):
             if key in args and (not isinstance(args[key],str) or '\x00' in args[key]): raise ValueError('Invalid '+key)
 
@@ -619,9 +758,12 @@ class EditorService(NativeHost):
         with self.lock:
             if self.call('simulationInfo')['state'] in (1,2):raise RuntimeError('Stop interactive simulation before regenerating its netlist or running numeric analysis')
             refreshed=False
+            before=None
+            checkpoint=None
             if self.topology_dirty:
-                before=self.call('circuitState')
-                self.restore(self.checkpoint());refreshed=True
+                before=self.call('projectCircuitState')['states']
+                checkpoint=self.checkpoint()
+                self.restore(checkpoint);refreshed=True
             result=self.call('netlist')
             from .netlist_diagnostics import hidden_power_diagnostics
             content=result.get('content','')
@@ -631,9 +773,11 @@ class EditorService(NativeHost):
                 diagnostics=hidden_power_diagnostics(content,components)
             result['diagnostics']=diagnostics
             if refreshed:
-                after=self.call('circuitState')
+                after=self.call('projectCircuitState')['states']
+                selected=checkpoint.get('sheet_index',0)
+                state=next((s for s in after if s.get('sheet_index')==selected),after[0] if after else {})
                 return {**result,'handles_invalidated':True,'handle_generation':self.handle_generation,
-                        'state':after,**identity_changes(before,after)}
+                        'state':state,**identity_changes(before,after)}
             return {**result,'handles_invalidated':False}
 
     @staticmethod
@@ -645,10 +789,10 @@ class EditorService(NativeHost):
         return path.resolve()
 
     def export_image(self, output_path, overwrite=False, dpi=96, scale=1., region=None, fit_content=False,padding=18,show_frame=False,show_grid=False,*,interactive=False,active_component=None,wait_timeout=None,cancel=None):
-        if not isinstance(dpi,int) or dpi<=0 or not math.isfinite(scale) or scale<=0:
+        if not _is_int(dpi) or dpi<=0 or not _is_finite_number(scale) or scale<=0:
             raise ValueError('DPI and scale must be positive')
         factor=dpi/96*scale
-        if not isinstance(padding,int) or padding<0:raise ValueError('Padding must be nonnegative')
+        if not _is_int(padding) or padding<0:raise ValueError('Padding must be nonnegative')
         if region is not None and fit_content:raise ValueError('Choose region or fit_content')
         if not isinstance(show_frame,bool) or not isinstance(show_grid,bool):raise ValueError('show_frame and show_grid must be boolean')
         with self.lock:
@@ -660,7 +804,7 @@ class EditorService(NativeHost):
                 if not content:raise ValueError('No circuit content to fit')
                 region={k:v+(-padding if k in ('left','top') else padding) for k,v in content.items()}
             if region is not None:
-                if set(region)!={'left','top','right','bottom'} or any(not isinstance(v,int) or not -2147483648<=v<=2147483647 for v in region.values()):raise ValueError('Region must contain integer left/top/right/bottom sheet coordinates')
+                if not isinstance(region,dict) or set(region)!={'left','top','right','bottom'} or any(not _is_int(v) or not -2147483648<=v<=2147483647 for v in region.values()):raise ValueError('Region must contain integer left/top/right/bottom sheet coordinates')
                 width=region['right']-region['left'];height=region['bottom']-region['top']
                 if width<=0 or height<=0:raise ValueError('Export region must have positive size')
             else:
@@ -698,17 +842,22 @@ class EditorService(NativeHost):
                     'source':'native schematic image renderer',**({k:captured[k] for k in ('capture_mode','display_states','simulation')} if captured else {})}
 
     def export_interactive_image(self,output_path,overwrite=False,dpi=144,scale=1.,region=None,fit_content=False,padding=18,show_frame=False,show_grid=False,active_component=None,wait_timeout=None,*,cancel=None):
-        if wait_timeout is not None and (not math.isfinite(wait_timeout) or wait_timeout<0):raise ValueError('wait_timeout must be finite and nonnegative')
+        if wait_timeout is not None and (not _is_finite_number(wait_timeout) or wait_timeout<0):raise ValueError('wait_timeout must be finite and nonnegative')
         if active_component is not None and (not isinstance(active_component,str) or not active_component):raise ValueError('active_component must be a component reference')
         self.interactive_status()
         return self.export_image(output_path,overwrite,dpi,scale,region,fit_content,padding,show_frame,show_grid,
                                  interactive=True,active_component=active_component,wait_timeout=wait_timeout,cancel=cancel)
 
+    def run_dc_sweep(self, source: str, start: float = 0., stop: float = 5., step: float = 0.1) -> dict:
+        return self.run_analysis('dc',dc_source=source,dc_start=start,dc_stop=stop,dc_step=step)
+
     def run_analysis(self, analysis='op', step=1e-5, stop=0.01, use_initial_conditions=False,
-                     ac_sweep='dec',ac_points=20,ac_start=1.,ac_stop=100000.,*,persist=False,save_to_source=False,use_saved_settings=False):
+                     ac_sweep='dec',ac_points=20,ac_start=1.,ac_stop=100000.,
+                     dc_source=None,dc_start=0.,dc_stop=5.,dc_step=0.1,
+                     *,persist=False,save_to_source=False,use_saved_settings=False):
         from .settings import validate_analysis_options
         validate_analysis_options(analysis,step,stop,use_initial_conditions,ac_sweep,ac_points,ac_start,ac_stop,
-                                  persist,save_to_source,use_saved_settings)
+                                  persist,save_to_source,use_saved_settings,dc_source,dc_start,dc_stop,dc_step)
         with self.lock:
             saved=None;native_commands=None
             if persist:
@@ -721,7 +870,9 @@ class EditorService(NativeHost):
                 saved_execution(saved)
                 native_commands=self.call('documentAnalysisCommands',{'scope':'analysis','analysis_type':analysis.upper()})
             stem=self.folder()/('analysis-'+uuid.uuid4().hex)
-            diagnostic=stem.with_suffix('.json');record={'analysis':analysis,'status':'running','use_initial_conditions':use_initial_conditions}
+            diagnostic=stem.with_suffix('.json')
+            record={'analysis':analysis,'status':'running','use_initial_conditions':use_initial_conditions,
+                    **({'dc_source':dc_source,'dc_start':dc_start,'dc_stop':dc_stop,'dc_step':dc_step} if analysis=='dc' else {})}
             diagnostic.write_text(json.dumps(record,indent=2),encoding='utf-8')
             self.analysis_started.clear()
             try:
@@ -739,6 +890,7 @@ class EditorService(NativeHost):
                 with self.analysis_transport(stem) as transport:
                     result=self.call('simulate',{'analysis':analysis,'step':step,'stop':stop,'use_initial_conditions':use_initial_conditions,
                         'ac_sweep':ac_sweep,'ac_points':ac_points,'ac_start':ac_start,'ac_stop':ac_stop,'source_path':str(transport.with_suffix('.cir')),
+                        **({'dc_source':dc_source,'dc_start':dc_start,'dc_stop':dc_stop,'dc_step':dc_step} if analysis=='dc' else {}),
                         **({'saved_commands':native_commands} if native_commands else {})})
                     record['native']=result
                     self.analysis_started.clear()
@@ -751,8 +903,15 @@ class EditorService(NativeHost):
                 raw=stem.with_suffix('.raw')
                 if not raw.is_file():raise RuntimeError('Native simulator produced no waveform')
                 data=parse_raw(raw)
-                expected={'tran':'Transient Analysis','op':'DC Operating Point','ac':'AC Analysis'}[analysis]
-                if data['plot']!=expected: raise RuntimeError('Simulator returned an unexpected plot: '+str(data['plot']))
+                actual_plot=str(data.get('plot',''))
+                if analysis=='dc':
+                    lowered=actual_plot.casefold()
+                    valid_plot=lowered in {'dc transfer characteristic','dc analysis','dc sweep','dc sweep analysis'} or (
+                        'dc' in lowered and 'operating point' not in lowered)
+                else:
+                    expected={'tran':'Transient Analysis','op':'DC Operating Point','ac':'AC Analysis'}[analysis]
+                    valid_plot=actual_plot==expected
+                if not valid_plot: raise RuntimeError('Simulator returned an unexpected plot: '+actual_plot)
                 csv_path=stem.with_suffix('.csv')
                 export_csv(data,csv_path);summary=summarize(data)
             except Exception as error:
@@ -761,11 +920,13 @@ class EditorService(NativeHost):
                 raise RuntimeError(str(error)+'; diagnostics: '+str(diagnostic)) from error
             record.update(status='complete',points=data['points'],raw_path=str(raw),csv_path=str(csv_path))
             diagnostic.write_text(json.dumps(record,indent=2),encoding='utf-8')
+            handles_invalidated=bool(netlist.get('handles_invalidated',False))
             return {'analysis':analysis,'plot':data['plot'],'points':data['points'],'vectors':summary,'unit_system':'SI',
                     'preview':data['rows'][:10],'raw_path':str(raw),'csv_path':str(csv_path),
                     'netlist_path':str(stem.with_suffix('.cir')),'native_result':result,'diagnostic_path':str(diagnostic),
                     'diagnostics':netlist.get('diagnostics',[]),
-                    'handles_invalidated':netlist['handles_invalidated'],
+                    'handles_invalidated':handles_invalidated,
+                    **({k:netlist[k] for k in ('handle_generation','id_map','unresolved_ids','state') if k in netlist} if handles_invalidated else {}),
                     **({'document_settings':{'revision':saved['revision'],'saved_to_file':saved['saved_to_file'],
                         'analysis_type':saved['analysis_type'],'commands':native_commands,**({'save':saved['save']} if 'save' in saved else {})}} if saved else {})}
 
@@ -856,7 +1017,7 @@ class EditorService(NativeHost):
 
     def control_interactive(self,action,wait_timeout=5.0):
         if action not in ('start','pause','resume','stop'):raise ValueError('Choose start, pause, resume or stop')
-        if not math.isfinite(wait_timeout) or wait_timeout<0:raise ValueError('wait_timeout must be finite and nonnegative')
+        if not _is_finite_number(wait_timeout) or wait_timeout<0:raise ValueError('wait_timeout must be finite and nonnegative')
         with self.lock:
             deadline=time.monotonic()+wait_timeout
             before=self.interactive_status();state=before['state_name']
@@ -892,9 +1053,9 @@ class EditorService(NativeHost):
     def read_waveform(self,path,offset=0,limit=1000,plot_index=0):
         source=Path(path)
         if not source.is_absolute() or not source.is_file() or source.suffix.lower()!='.raw': raise ValueError('Choose an existing absolute ASCII RAW path')
-        if not 0<=offset or limit<1: raise ValueError('Invalid waveform offset or limit')
+        if not _is_int(offset) or not _is_int(limit) or offset<0 or limit<1: raise ValueError('Invalid waveform offset or limit')
         first=parse_raw(source);plots=[first,*first.pop('additional_plots')]
-        if not isinstance(plot_index,int) or not 0<=plot_index<len(plots):raise ValueError('Invalid waveform plot index')
+        if not _is_int(plot_index) or not 0<=plot_index<len(plots):raise ValueError('Invalid waveform plot index')
         data=plots[plot_index];rows=data['rows']
         return {**{k:v for k,v in data.items() if k!='rows'},'plot_index':plot_index,
                 'plots':[{k:v for k,v in plot.items() if k!='rows'} for plot in plots],
@@ -931,31 +1092,43 @@ class EditorService(NativeHost):
                 self.close();raise
 
     def create(self,title='Circuit',output_path=None):
-        if self.process and self.process.poll() is None: raise RuntimeError('Close or detach the current project first')
-        if not title or not isinstance(title,str) or "\0" in title: raise ValueError('Provide a nonempty native title')
-        directory=Path.cwd()
-        if output_path:
-            path=Path(output_path).expanduser()
-            if not path.is_absolute():raise ValueError('output_path must be an absolute .ms14 file path')
-            path=path.resolve()
-            if path.suffix.lower()!='.ms14' or not path.parent.is_dir():raise ValueError('Choose an .ms14 output in an existing directory')
-            if path.exists():raise FileExistsError('Circuit already exists; open it with native_open_circuit to edit it')
-        else:
-            stem=re.sub(r'[<>:"/\\|?*\x00-\x1f]','_',title).strip(' .') or 'Circuit'
-            if re.fullmatch(r'(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])',stem):stem='Circuit-'+stem
-            path=directory/(stem+'.ms14');index=2
-            while path.exists():path=directory/(stem+'-'+str(index)+'.ms14');index+=1
-        with path.open('xb') as target, (ROOT/'assets'/'blank14.3.ms14').open('rb') as template:shutil.copyfileobj(template,target)
-        result=self.open_circuit(str(path))
-        if self.call('components')['components'] or self.call('wires')['wires']:
-            self.close();raise RuntimeError('Native blank template contains unexpected objects')
-        self.edit('sheetTitle',{'title':title})
-        saved=self.save_source()
-        return {**result,'title':title,'blank':True,'path':str(path),'save':saved}
+        with self.lock:
+            if self.process and self.process.poll() is None: raise RuntimeError('Close or detach the current project first')
+            if not title or not isinstance(title,str) or "\0" in title: raise ValueError('Provide a nonempty native title')
+            directory=Path.cwd()
+            if output_path:
+                path=Path(output_path).expanduser()
+                if not path.is_absolute():raise ValueError('output_path must be an absolute .ms14 file path')
+                path=path.resolve()
+                if path.suffix.lower()!='.ms14' or not path.parent.is_dir():raise ValueError('Choose an .ms14 output in an existing directory')
+                if path.exists():raise FileExistsError('Circuit already exists; open it with native_open_circuit to edit it')
+            else:
+                stem=re.sub(r'[<>:"/\\|?*\x00-\x1f]','_',title).strip(' .') or 'Circuit'
+                if re.fullmatch(r'(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])',stem):stem='Circuit-'+stem
+                path=directory/(stem+'.ms14');index=2
+                while path.exists():path=directory/(stem+'-'+str(index)+'.ms14');index+=1
+            with path.open('xb') as target, (ROOT/'assets'/'blank14.3.ms14').open('rb') as template:shutil.copyfileobj(template,target)
+            try:
+                result=self.open_circuit(str(path))
+                if self.call('components')['components'] or self.call('wires')['wires']:
+                    raise RuntimeError('Native blank template contains unexpected objects')
+                self.edit('sheetTitle',{'title':title})
+                saved=self.save_source()
+                return {**result,'title':title,'blank':True,'path':str(path),'save':saved}
+            except BaseException:
+                try:
+                    self.close()
+                finally:
+                    if self.source==path or self.working==path:
+                        self.source=self.working=self.source_hash=self.working_hash=None
+                    path.unlink(missing_ok=True)
+                raise
 
     def close(self):
         job=getattr(self,'analysis_job',None)
         if self.agent and job and job['status'] in ('running','pause_requested','stop_requested'):
             try:self.control_analysis('stop')
             except Exception:pass
-        return super().close()
+        result = super().close()
+        self.numeric_session_used = False
+        return result

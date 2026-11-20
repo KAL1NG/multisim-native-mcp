@@ -6,6 +6,7 @@ import ctypes
 from ctypes import wintypes as w
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -17,7 +18,105 @@ import uuid
 import frida
 
 from .paths import RESOURCE_DIR as ROOT, DATA_DIR
-INSTALL = Path(os.environ.get('MULTISIM_NATIVE_INSTALL', str(Path(os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)')) / 'National Instruments' / 'Circuit Design Suite 14.3')))
+
+
+def _default_install_dir() -> Path:
+    return Path(os.environ.get('MULTISIM_NATIVE_INSTALL', str(Path(os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)')) / 'National Instruments' / 'Circuit Design Suite 14.3')))
+
+
+_INITIAL_INSTALL = _default_install_dir()
+INSTALL = _INITIAL_INSTALL
+_MODAL_WATCHDOG_DELAY = 5.0
+_MODAL_WATCHDOG_INTERVAL = 1.0
+
+
+def install_dir() -> Path:
+    if INSTALL is not _INITIAL_INSTALL:
+        return Path(INSTALL)
+    return _default_install_dir()
+
+
+def _window_text(user, hwnd) -> str:
+    length = user.GetWindowTextLengthW(hwnd)
+    if length <= 0:
+        return ''
+    buf = ctypes.create_unicode_buffer(length + 2)
+    count = user.GetWindowTextW(hwnd, buf, len(buf))
+    return buf.value[:count].strip() if count > 0 else ''
+
+
+def _window_class(user, hwnd) -> str:
+    buf = ctypes.create_unicode_buffer(256)
+    count = user.GetClassNameW(hwnd, buf, len(buf))
+    return buf.value[:count] if count > 0 else ''
+
+
+def detect_modal_dialogs(pid: int) -> list[dict]:
+    """Find visible #32770 modal dialogs belonging to pid without blocking on its UI thread."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or os.name != 'nt':
+        return []
+    user = ctypes.WinDLL('user32', use_last_error=True)
+    enum_proc = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+    user.IsWindowVisible.argtypes, user.IsWindowVisible.restype = [w.HWND], w.BOOL
+    user.GetWindowThreadProcessId.argtypes, user.GetWindowThreadProcessId.restype = [w.HWND, ctypes.POINTER(w.DWORD)], w.DWORD
+    user.GetClassNameW.argtypes, user.GetClassNameW.restype = [w.HWND, w.LPWSTR, ctypes.c_int], ctypes.c_int
+    user.GetWindowTextLengthW.argtypes, user.GetWindowTextLengthW.restype = [w.HWND], ctypes.c_int
+    user.GetWindowTextW.argtypes, user.GetWindowTextW.restype = [w.HWND, w.LPWSTR, ctypes.c_int], ctypes.c_int
+    user.EnumWindows.argtypes, user.EnumWindows.restype = [enum_proc, w.LPARAM], w.BOOL
+    user.EnumChildWindows.argtypes, user.EnumChildWindows.restype = [w.HWND, enum_proc, w.LPARAM], w.BOOL
+
+    dialogs: list[dict] = []
+
+    @enum_proc
+    def on_top_window(hwnd, _lparam):
+        if not user.IsWindowVisible(hwnd):
+            return True
+        owner_pid = w.DWORD(0)
+        user.GetWindowThreadProcessId(hwnd, ctypes.byref(owner_pid))
+        if owner_pid.value != pid:
+            return True
+        if _window_class(user, hwnd) != '#32770':
+            return True
+        title = _window_text(user, hwnd)
+        messages: list[str] = []
+        buttons: list[str] = []
+
+        @enum_proc
+        def on_child(child_hwnd, _child_lparam):
+            text = _window_text(user, child_hwnd)
+            if _window_class(user, child_hwnd).lower() == 'button':
+                if user.IsWindowVisible(child_hwnd):
+                    buttons.append(text)
+                return True
+            if text and text not in messages:
+                messages.append(text)
+            return True
+
+        user.EnumChildWindows(hwnd, on_child, 0)
+        # Splash/progress windows are #32770 too but have no buttons; only a
+        # dialog awaiting user input (message box, duplicate-net prompt) has one.
+        if buttons:
+            dialogs.append({'title': title, 'messages': messages, 'buttons': [b for b in buttons if b]})
+        return True
+
+    user.EnumWindows(on_top_window, 0)
+    return dialogs
+
+
+def _format_modal_dialogs(dialogs: list[dict]) -> str:
+    parts = []
+    for dialog in dialogs:
+        title = dialog.get('title') or '<untitled dialog>'
+        messages = [m for m in dialog.get('messages', []) if m]
+        parts.append(f'{title}: {" | ".join(messages)}' if messages else title)
+    return '; '.join(parts)
+
+
+def _wait_process(proc, timeout: float) -> None:
+    try:
+        proc.wait(timeout=timeout)
+    except TypeError:
+        proc.wait()
 
 
 def editor_script():
@@ -103,10 +202,11 @@ class NativeHost:
         atexit.register(self.close)
 
     def runtime_status(self) -> dict:
+        install = install_dir()
         manifest = json.loads((ROOT / 'native-profile.json').read_text(encoding='utf-8'))
         checks = []
         for name, digest in manifest['modules'].items():
-            path = INSTALL / name
+            path = install / name
             check = {'module': name, 'present': path.is_file(), 'match': False}
             try:
                 check['match'] = sha256(path) == digest if check['present'] else False
@@ -115,10 +215,10 @@ class NativeHost:
             checks.append(check)
         attached=bool(self.process and self.process.poll() is None)
         processes=[{'pid':p.pid,'name':p.name} for p in frida.get_local_device().enumerate_processes() if p.name.lower() in ('multisim','multisim.exe')]
-        return {'available': (INSTALL / 'multisim.exe').is_file(),
+        return {'available': (install / 'multisim.exe').is_file(),
                 'compatible': all(c['match'] for c in checks), 'profile_enforced': False,
                 'tested_version': manifest['version'],
-                'install': str(INSTALL), 'checks': checks, 'backend': 'private-native-cpp/frida',
+                'install': str(install), 'checks': checks, 'backend': 'private-native-cpp/frida',
                 'official_com': False, 'screenshot_or_mouse': False,
                 'running':bool(processes) or attached,'session_attached':attached,'processes':processes,
                 'pid':self.process.pid if attached else processes[0]['pid'] if len(processes)==1 else None}
@@ -157,11 +257,12 @@ class NativeHost:
         with self.lock:
             if self.process and self.process.poll() is None:
                 raise RuntimeError('A copy is already open. Save and close it before opening another.')
+            install = install_dir()
             source = Path(source_path)
             if not source.is_absolute() or source.suffix.lower() != '.ms14' or not source.is_file():
                 raise ValueError('source_path must be an absolute path to an existing .ms14 file')
-            if not (INSTALL / 'multisim.exe').is_file():
-                raise FileNotFoundError('Multisim executable not found: ' + str(INSTALL / 'multisim.exe'))
+            if not (install / 'multisim.exe').is_file():
+                raise FileNotFoundError('Multisim executable not found: ' + str(install / 'multisim.exe'))
             if not isolated and source.resolve()==(ROOT/'assets'/'blank14.3.ms14').resolve():
                 raise ValueError('Use native_create_circuit to create a workspace document from the packaged template')
             target=Path(output_path).expanduser() if output_path else source.with_name(source.stem+'.copy-'+uuid.uuid4().hex[:8]+'.ms14')
@@ -170,6 +271,9 @@ class NativeHost:
             if isolated and target.exists():raise FileExistsError('Comparison output already exists')
             if any(p.name.lower() in ('multisim', 'multisim.exe') for p in frida.get_local_device().enumerate_processes()):
                 raise RuntimeError('Choose native_open_circuit to reuse an existing Multisim window, or native_attach to select a process; isolated copy startup requires other windows to be closed.')
+            startup_timeout = float(os.environ.get('MULTISIM_NATIVE_STARTUP_TIMEOUT', '90'))
+            if not math.isfinite(startup_timeout) or startup_timeout <= 0:
+                raise ValueError('MULTISIM_NATIVE_STARTUP_TIMEOUT must be finite and positive')
             self.close()
             self.owned = True
             self.undo_stack, self.redo_stack = [], []
@@ -189,25 +293,34 @@ class NativeHost:
             # Initialize minimized without activation, then hide after the native sheet is ready.
             startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
             # Multisim's legacy command parser expects a quoted document argument, even without spaces.
-            command = f'"{INSTALL / "multisim.exe"}" "{self.working}"'
+            command = f'"{install / "multisim.exe"}" "{self.working}"'
             self.process = subprocess.Popen(command,
-                                            cwd=INSTALL, startupinfo=startup,
+                                            cwd=install, startupinfo=startup,
                                             env=native_environment(),
                                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            readiness = None
             try:
                 self._own_job()
                 # Let the ordinary startup message loop initialize DAO and the schematic extension
                 # before querying/materializing documents from a message-pump callback.
                 # DLL presence alone does not mean CLR/license/DAO startup is complete.
-                ready_after = time.monotonic() + 8
+                started_at = time.monotonic()
+                ready_after = started_at + 8
+                startup_deadline = started_at + startup_timeout
                 wait_idle = ctypes.WinDLL('user32').WaitForInputIdle
                 wait_idle.argtypes, wait_idle.restype = [w.HANDLE,w.DWORD],w.DWORD
                 last_error = None
                 candidate = None
-                readiness = None
                 while True:
                     if self.process.poll() is not None:
                         raise RuntimeError(f'Multisim exited during startup with code {self.process.returncode}')
+                    if time.monotonic() >= ready_after and isinstance(getattr(self.process, 'pid', None), int):
+                        dialogs = detect_modal_dialogs(self.process.pid)
+                        if dialogs:
+                            raise RuntimeError('Multisim blocked on modal dialog during startup: ' + _format_modal_dialogs(dialogs))
+                    if time.monotonic() >= startup_deadline:
+                        suffix = f' (last error: {last_error})' if last_error else ''
+                        raise RuntimeError(f'Multisim startup timed out after {startup_timeout:g}s{suffix}')
                     if time.monotonic() < ready_after or wait_idle(w.HANDLE(int(self.process._handle)),0) != 0:
                         time.sleep(0.25)
                         continue
@@ -252,6 +365,10 @@ class NativeHost:
                         last_error = str(error)
                         if 'Multisim startup error:' in last_error:raise RuntimeError(last_error) from error
                         if 'SyntaxError:' in last_error: raise RuntimeError('Native agent syntax error: '+last_error) from error
+                        if 'Isolated process opened an unexpected project' in last_error:
+                            raise RuntimeError(last_error) from error
+                        if 'Multisim blocked on modal dialog' in last_error:
+                            raise RuntimeError(last_error) from error
                         if readiness:
                             try:
                                 (folder / 'dao-trace.json').write_text(json.dumps(readiness.exports_sync.report(), indent=2), encoding='utf-8')
@@ -264,6 +381,12 @@ class NativeHost:
                                 pass
                         time.sleep(0.4)
             except BaseException as error:
+                if readiness is not None:
+                    try:
+                        readiness.unload()
+                    except Exception:
+                        pass
+                    readiness = None
                 transient_startup=(_startup_attempt==0 and self.agent is None and
                     ('Multisim startup error:' in str(error) or
                      self.process and self.process.poll()==0xE0434352))
@@ -277,6 +400,12 @@ class NativeHost:
                         output_path=str(failed_copy)
                     return self._open(source_path,isolated,output_path,1)
                 raise
+            finally:
+                if readiness is not None:
+                    try:
+                        readiness.unload()
+                    except Exception:
+                        pass
 
     def call(self, operation: str, args: dict | None = None) -> dict:
         with self.lock:
@@ -285,17 +414,60 @@ class NativeHost:
             # Long numeric runs remain cancellable through the native analysis
             # controls; a fixed edit watchdog must not kill valid simulations.
             owned = self.process
+            pid = getattr(owned, 'pid', None)
             started = time.monotonic()
             self.native_call_count += 1
+            done_event = threading.Event()
+            modal_detected: list[dict] = []
+            session_dir = self.session_dir
+            if (self.owned and isinstance(pid, int) and not isinstance(pid, bool) and pid > 0 and
+                    operation not in ('simulate', 'interactiveCommand', 'exportInteractiveImage')):
+                def _watch_modal():
+                    if done_event.wait(_MODAL_WATCHDOG_DELAY):
+                        return
+                    while not done_event.is_set():
+                        if owned.poll() is not None:
+                            return
+                        dialogs = detect_modal_dialogs(pid)
+                        if dialogs:
+                            modal_detected.extend(dialogs)
+                            if session_dir:
+                                try:
+                                    with (session_dir / 'native-diagnostics.jsonl').open('a', encoding='utf-8') as file:
+                                        file.write(json.dumps({'type': 'modal_dialog_detected', 'operation': operation, 'dialogs': dialogs}) + '\n')
+                                except Exception:
+                                    pass
+                            try:
+                                owned.terminate()
+                            except Exception:
+                                pass
+                            return
+                        if done_event.wait(_MODAL_WATCHDOG_INTERVAL):
+                            return
+
+                threading.Thread(target=_watch_modal, daemon=True).start()
+            frida_errors = tuple({frida.InvalidOperationError, frida.ProcessNotFoundError, getattr(frida, 'TransportError', frida.InvalidOperationError)})
             try:
-                return json.loads(self.agent.exports_sync.dispatch(operation, args or {}))
-            except (frida.InvalidOperationError, frida.ProcessNotFoundError) as error:
+                response = json.loads(self.agent.exports_sync.dispatch(operation, args or {}))
+                if modal_detected:
+                    raise RuntimeError(f'Native {operation} blocked on modal dialog after {time.monotonic()-started:.1f}s ({_format_modal_dialogs(modal_detected)}); owned process terminated')
+                return response
+            except frida_errors as error:
+                if modal_detected:
+                    raise RuntimeError(f'Native {operation} blocked on modal dialog after {time.monotonic()-started:.1f}s ({_format_modal_dialogs(modal_detected)}); owned process terminated') from error
                 raise RuntimeError(f'Native {operation} interrupted after {time.monotonic()-started:.1f}s; owned process exit={owned.poll()}: {error}') from error
+            except Exception as error:
+                if modal_detected and 'blocked on modal dialog' not in str(error):
+                    raise RuntimeError(f'Native {operation} blocked on modal dialog after {time.monotonic()-started:.1f}s ({_format_modal_dialogs(modal_detected)}); owned process terminated') from error
+                raise
             finally:
+                done_event.set()
                 self.native_call_seconds += time.monotonic()-started
 
     def _message(self,message,data):
-        if message.get('payload',{}).get('analysis_started'): self.analysis_started.set()
+        payload = message.get('payload') if isinstance(message, dict) else None
+        if isinstance(payload, dict) and payload.get('analysis_started'):
+            self.analysis_started.set()
         if self.session_dir:
             with (self.session_dir/'native-diagnostics.jsonl').open('a',encoding='utf-8') as file:
                 file.write(json.dumps(message)+'\n')
@@ -307,6 +479,7 @@ class NativeHost:
             self.agent.unload()
             code = editor_script()
             self.agent = self.session.create_script(code,runtime='v8')
+            self.agent.on('message', self._message)
             self.agent.load()
             return self.agent.exports_sync.identity()
 
@@ -350,6 +523,7 @@ class NativeHost:
         with self.lock:
             pid = self.process.pid if self.process else None
             if self.process and self.process.poll() is None and self.owned:
+                wm_closed = False
                 try:
                     if self.agent:
                         self.call('prepareClose')
@@ -357,11 +531,20 @@ class NativeHost:
                         user = ctypes.WinDLL('user32')
                         user.PostMessageW.argtypes, user.PostMessageW.restype = [w.HWND,w.UINT,w.WPARAM,w.LPARAM],w.BOOL
                         user.PostMessageW(hwnd,0x0010,0,0)  # WM_CLOSE: let DAO and extensions release normally.
+                        wm_closed = True
                     else:
                         self.process.terminate()
                 except Exception:
                     self.process.terminate()
-                self.process.wait()
+                try:
+                    _wait_process(self.process, 10 if wm_closed else 5)
+                except subprocess.TimeoutExpired:
+                    self.process.terminate()
+                    try:
+                        _wait_process(self.process, 5)
+                    except subprocess.TimeoutExpired:
+                        if hasattr(self.process, 'kill'):
+                            self.process.kill()
             if self.agent and not self.owned:
                 try:
                     self.agent.exports_sync.close()

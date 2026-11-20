@@ -50,6 +50,30 @@ function instanceString(dll,prefix,object,args=[],types=[]) {
   const fn=method(dll,prefix,'pointer',['pointer','pointer',...types]);
   return readCStringResult((out,...a)=>fn(object,out,...a),args);
 }
+function componentLibraryInfo(ci) {
+  const attr=method('CIRCEXP.dll','?GetAttribute@CiElement@@','pointer',['pointer','uint'])(ci,4);
+  if(attr.isNull()||!/CiaCollString/.test(rtti(attr).name))return [];
+  return Array.from({length:5},(_,index)=>instanceString('CIRCEXP.dll','?GetParam@CiaCollString@@',attr,[index],['int']));
+}
+const PARAMETER_DESCRIPTORS={
+  RESISTOR_VIRTUAL:{0:{role:'model_option'},1:{name:'resistance',unit:'Ohm',role:'value'}},
+  CAPACITOR_VIRTUAL:{0:{role:'model_option'},1:{name:'capacitance',unit:'F',role:'value'}},
+  INDUCTOR_VIRTUAL:{0:{role:'model_option'},1:{name:'inductance',unit:'H',role:'value'}},
+  DC_POWER:{0:{role:'model_option'},1:{name:'voltage',unit:'V',role:'value'}},
+  DC_CURRENT:{0:{role:'model_option'},1:{name:'current',unit:'A',role:'value'}},
+  VDD:{0:{name:'voltage',unit:'V',role:'value'}},
+  VCC:{0:{name:'voltage',unit:'V',role:'value'}},
+  VSS:{0:{name:'voltage',unit:'V',role:'value'}},
+  VEE:{0:{name:'voltage',unit:'V',role:'value'}},
+  AC_POWER:{0:{role:'model_option'},1:{name:'voltage_rms',unit:'V',role:'value'},5:{name:'frequency',unit:'Hz'},13:{name:'ac_magnitude',unit:'V'}},
+  AC_VOLTAGE:{0:{role:'model_option'},1:{name:'voltage_pk',unit:'V',role:'value'},5:{name:'frequency',unit:'Hz'},13:{name:'ac_magnitude',unit:'V'}},
+  CLOCK_VOLTAGE:{0:{role:'model_option'},1:{name:'frequency',unit:'Hz',role:'value'},3:{name:'duty_cycle',unit:'%'},5:{name:'voltage',unit:'V'},7:{name:'rise_time',unit:'s'},9:{name:'fall_time',unit:'s'}},
+  PULSE_VOLTAGE:{0:{role:'model_option'},1:{name:'initial_value',unit:'V'},3:{name:'pulsed_value',unit:'V'},7:{name:'rise_time',unit:'s'},9:{name:'fall_time',unit:'s'},11:{name:'pulse_width',unit:'s'},13:{name:'period',unit:'s'}},
+  OPAMP_3T_VIRTUAL:{0:{role:'model_option'},7:{name:'open_loop_gain'},9:{name:'input_resistance',unit:'Ohm'},11:{name:'output_resistance',unit:'Ohm'},15:{name:'v_pos',unit:'V'},17:{name:'v_neg',unit:'V'}},
+  POTENTIOMETER_VIRTUAL:{3:{name:'wiper_step',unit:'%'},5:{name:'resistance',unit:'Ohm',role:'value'}},
+  POTENTIOMETER_RATED:{3:{name:'wiper_step',unit:'%'},7:{name:'resistance',unit:'Ohm',role:'value'},9:{name:'rated_power',unit:'W'}},
+  POTENTIOMETER1_5K:{3:{name:'wiper_step',unit:'%'}}
+};
 function parameterInfo(args,source=null) {
   const c=source||component(args.ref),ci=ciObject(ptr(c.id));
   const attr=method('CIRCEXP.dll','?GetAttribute@CiElement@@','pointer',['pointer','uint'])(ci,2);
@@ -59,60 +83,125 @@ function parameterInfo(args,source=null) {
     const exprCount=method('CIRCEXP.dll','?GetExprParamCount@CiaParamList@@','int',['pointer'])(attr);
     for(let n=0;n<Math.max(count,exprCount);n++)parameters.push({index:n,value:n<count?parameterDouble(attr,n):null,expression:n<exprCount?instanceString('CIRCEXP.dll','?GetExprParam@CiaParamList@@',attr,[n],['int']):null});
   }
-  const info=[];
-  const coll=method('CIRCEXP.dll','?GetAttribute@CiElement@@','pointer',['pointer','uint'])(ci,4);
-  if(!coll.isNull() && /CiaCollString/.test(rtti(coll).name)) {
-    for(let n=0;n<5;n++)info.push(instanceString('CIRCEXP.dll','?GetParam@CiaCollString@@',coll,[n],['int']));
-  }
-  const descriptor={RESISTOR_VIRTUAL:['resistance','Ohm'],CAPACITOR_VIRTUAL:['capacitance','F'],INDUCTOR_VIRTUAL:['inductance','H'],DC_POWER:['voltage','V']}[info[1]];
-  if(descriptor)for(const p of parameters){if(p.index===1)Object.assign(p,{name:descriptor[0],unit:descriptor[1],role:'value'});else if(p.index===0)p.role='model_option';}
+  const info=componentLibraryInfo(ci);
+  const partKey=(info[1]||'').toUpperCase();
+  const slots=PARAMETER_DESCRIPTORS[partKey]||((info[3]||'').toUpperCase()==='VCC'&&/^(VDD|VCC|VSS|VEE)$/i.test(info[1]||'')?PARAMETER_DESCRIPTORS.VCC:null)||((info[0]||'').toUpperCase()==='LED'&&parameters.length>=2?{0:{role:'model_option'},1:{name:'on_current',unit:'A',role:'value'}}:null);
+  if(slots)for(const p of parameters)if(slots[p.index])Object.assign(p,slots[p.index]);
   return {ref:c.ref,ci:ci.toString(),info,parameters};
 }
 function setParameter(args,displayExpression=null) {
+  const hasValue=args.value!==undefined,hasExpr=args.expression!==undefined;
+  if(hasValue===hasExpr)throw new Error('Provide exactly one of value or expression');
+  if(hasValue&&(typeof args.value!=='number'||!Number.isFinite(args.value)))throw new Error('Parameter value must be a finite number');
+  if(hasExpr&&(typeof args.expression!=='string'||!args.expression.trim()||args.expression.includes('\0')))throw new Error('Parameter expression must be a non-empty string');
   const before=parameterInfo(args),c=component(args.ref),ci=ciObject(ptr(c.id));
-  if(!before.parameters.some(p=>p.index===args.index))throw new Error('Parameter index does not exist');
-  if(args.expression!==undefined) {
+  let index=args.index;
+  if(index===undefined||index===null){
+    const wantName=args.name,wantRole=args.role||(wantName?undefined:'value');
+    const matches=before.parameters.filter(p=>(!wantName||p.name===wantName)&&(!wantRole||p.role===wantRole));
+    if(matches.length!==1){
+      const available=before.parameters.filter(p=>p.name||p.role).map(p=>`${p.index}:${p.name||p.role}`).join(', ')||'none';
+      throw new Error(`Expected one matching parameter slot for ${JSON.stringify({name:wantName,role:wantRole})} on ${c.ref}; found ${matches.length} (available: ${available})`);
+    }
+    index=matches[0].index;
+  } else if(typeof index!=='number'||!Number.isInteger(index)||index<0) {
+    throw new Error('Parameter index must be a non-negative integer');
+  }
+  const slot=before.parameters.find(p=>p.index===index);
+  if(!slot)throw new Error('Parameter index does not exist');
+  if(hasExpr) {
     const attr=method('CIRCEXP.dll','?GetAttribute@CiElement@@','pointer',['pointer','uint'])(ci,2),text=pathString(args.expression);
-    const ok=method('CIRCEXP.dll','?SetExprParam@CiaParamList@@','uint8',['pointer','int','pointer','int'])(attr,args.index,text,1);
+    const ok=method('CIRCEXP.dll','?SetExprParam@CiaParamList@@','uint8',['pointer','int','pointer','int'])(attr,index,text,1);
     native('Library.dll','??1CPathString@@QAE@XZ','void',['pointer'])(text);
     if(!ok)throw new Error('Native expression setter rejected the value');
   } else {
-    method('CIRCEXP.dll','?SetDoubleParam@CiElement@@','void',['pointer','double','int'])(ci,args.value,args.index);
+    // Supply models can store voltage only as an expression. Ordinary numeric slots may
+    // start without a numeric entry, so still initialize them through the native setter.
+    const expressionOnlySupply=index===0&&slot.value===null&&/^(VDD|VCC|VSS|VEE)$/i.test(before.info[1]||'');
+    if(!expressionOnlySupply)method('CIRCEXP.dll','?SetDoubleParam@CiElement@@','void',['pointer','double','int'])(ci,args.value,index);
     const attr=method('CIRCEXP.dll','?GetAttribute@CiElement@@','pointer',['pointer','uint'])(ci,2),text=pathString(displayExpression??String(args.value));
-    method('CIRCEXP.dll','?SetExprParam@CiaParamList@@','uint8',['pointer','int','pointer','int'])(attr,args.index,text,1);
+    const ok=method('CIRCEXP.dll','?SetExprParam@CiaParamList@@','uint8',['pointer','int','pointer','int'])(attr,index,text,1);
     native('Library.dll','??1CPathString@@QAE@XZ','void',['pointer'])(text);
+    if(!ok)throw new Error('Native expression setter rejected the value');
   }
   const labels=refreshComponentValue(c.id,true);
   return {before,after:parameterInfo({ref:c.id}),labels};
 }
 function replaceComponent(args) {
-  const old=component(args.ref),attached=wires().wires.filter(w=>w.source.ref===old.ref||w.target.ref===old.ref);
-  let temporary='MCP_REPLACEMENT';while(components().components.some(c=>c.ref===temporary))temporary+='X';
-  const created=placeComponent({...args,ref:temporary,x:Math.round(old.transform[4]),y:Math.round(old.transform[5])}).component;
+  const old=component(args.ref),attached=attachedWires(old,wires().wires);
+  const created=temporaryWiring({connect_touching:false},()=>placeComponent({...args,ref:undefined,x:Math.round(old.transform[4]),y:Math.round(old.transform[5])}).component);
   copyTransform(ptr(old.id),ptr(created.id),old.transform[4],old.transform[5]);
+  straightenComponentLabels(created.id);
+  arrangeComponentLabels(created.id);
   const pinMap=args.pin_map||{};
-  for(const w of attached)for(const end of ['source','target'])if(w[end].ref===old.ref && !created.pins.some(p=>p.name===(pinMap[w[end].pin]||w[end].pin)))throw new Error('Replacement has no matching pin '+w[end].pin+'; provide pin_map');
-  for(const w of attached)removeObject({id:w.id});removeObject({ref:old.ref});
-  renameComponent({ref:created.id,new_ref:old.ref});
+  for(const w of attached)for(const end of ['source','target'])if(ownsEndpoint(old,w[end]) && !created.pins.some(p=>p.name===(pinMap[w[end].pin]||w[end].pin))){
+    removeObject({id:created.id});
+    throw new Error('Replacement has no matching pin '+w[end].pin+'; provide pin_map');
+  }
+  for(const w of attached)removeObject({id:w.id});
+  removeObject({id:old.id});
+  if(!/^(VDD|VSS|VCC|VEE|GND|DGND|AGND)$/i.test(args.name||'')&&component(created.id).ref!==old.ref&&!components().components.some(c=>c.id!==created.id&&c.ref===old.ref)){
+    renameComponent({ref:created.id,new_ref:old.ref});
+  }
+  straightenComponentLabels(created.id);
+  arrangeComponentLabels(created.id);
   const links=[];
-  for(const w of attached){const endpoints={};for(const end of ['source','target'])endpoints[end]=w[end].ref===old.ref?{ref:old.ref,pin:pinMap[w[end].pin]||w[end].pin}:w[end].ref?{ref:w[end].ref,pin:w[end].pin}:{junction_id:w[end].id};links.push(connectEndpoint(endpoints));}
-  return {component:component(old.ref),reconnected_wires:links.length};
+  for(const w of attached){
+    const endpoints={};
+    for(const end of ['source','target'])
+      endpoints[end]=ownsEndpoint(old,w[end])?{ref:created.id,pin:pinMap[w[end].pin]||w[end].pin}:w[end].ref?{ref:w[end].component_id||w[end].ref,pin:w[end].pin}:{junction_id:w[end].id};
+    links.push(connectEndpoint(endpoints));
+  }
+  return {component:component(created.id),reconnected_wires:links.length};
+}
+function syncReferenceLabel(id,refText) {
+  const label=componentLabels({ref:id}).labels.find(l=>l.kind==='reference');
+  if(!label||label.text===refText)return;
+  const context=Process.getModuleByName('Od101dll.dll').getExportByName('?DefIC@@3VCODInstContext@@A');
+  method('Od101dll.dll','?SetText@CODTextComp@@','void',['pointer','pointer','pointer'])(ptr(label.id),Memory.allocUtf16String(refText),context);
+  method('Od101dll.dll','?Update@CODComponent@@UAEX','void',['pointer','pointer','uint8'])(ptr(label.id),context,0);
+}
+function syncInstanceReference(manager,componentState,newRef) {
+  if(componentState.ref===newRef||componentState.local_ref!==newRef)return;
+  const info=method('SCH_CAP.dll','?GetInstanceRefDesInfo@CIITHierRefDesManager@@','pointer',['pointer','pointer','pointer'])(manager,treeInstance(),Memory.allocUtf16String(newRef));
+  if(info.isNull())return;
+  const currentNumber=method('SCH_CAP.dll','?GetIRNumber@CIITHierRefDesInfo@@','int',['pointer'])(info);
+  // The native manager may allocate a different number while retaining the requested local name.
+  // Only change the numeric suffix of an ordinary reference; leave section and hierarchy references alone.
+  const suffix=String(currentNumber);
+  if(currentNumber<0||!componentState.ref.endsWith(suffix))return;
+  const prefix=componentState.ref.slice(0,-suffix.length);
+  if(!newRef.startsWith(prefix))return;
+  const requestedSuffix=newRef.slice(prefix.length),number=requestedSuffix===''?-1:Number(requestedSuffix);
+  if(requestedSuffix!==''&&(!/^\d+$/.test(requestedSuffix)||String(number)!==requestedSuffix||number>2147483647))return;
+  method('SCH_CAP.dll','?SetIRNumber@CIITHierRefDesInfo@@','void',['pointer','int'])(info,number);
 }
 function renameComponent(args) {
   const target=component(args.ref);
   if(rtti(ptr(target.id)).name==='.?AVCIITHierConnector@@')return updatePort({id:target.id,name:args.new_ref}).component;
-  if(components().components.some(c=>c.ref===args.new_ref))throw new Error('Reference already exists');
-  const c=component(args.ref),mgr=method('SCH_CAP.dll','?GetRefDesMgr@CMultisimExtension@@','pointer',['pointer','uint'])(extension(),0),text=pathString(args.new_ref);
+  if(components().components.some(c=>c.id!==target.id&&c.ref===args.new_ref))throw new Error('Reference already exists');
+  const libraryName=id=>{try{return parameterInfo({ref:id}).info[1]||'';}catch(_){return '';}};
+  const initialShared=/^(GROUND|VDD|VSS|VCC|VEE|GND|DGND|AGND)$/i.test(libraryName(target.id));
+  if(target.ref===args.new_ref&&target.local_ref===args.new_ref){
+    if(!initialShared)syncReferenceLabel(target.id,target.ref);
+    return component(target.id);
+  }
+  const c=target,mgr=method('SCH_CAP.dll','?GetRefDesMgr@CMultisimExtension@@','pointer',['pointer','uint'])(extension(),0),text=pathString(args.new_ref);
   method('SCH_CAP.dll','?RenameComponent@CIITHierRefDesManager@@','void',['pointer','pointer','pointer','pointer'])(mgr,ptr(c.id),treeInstance(),text);
   native('Library.dll','??1CPathString@@QAE@XZ','void',['pointer'])(text);
   let after=component(c.id);
-  if(after.ref!==args.new_ref && after.local_ref!==args.new_ref) {
+  const isSharedSupply=initialShared;
+  if((after.ref!==args.new_ref && after.local_ref!==args.new_ref)||(!isSharedSupply && after.local_ref!==args.new_ref)) {
     method('CIRCEXP.dll','?SetLocalName@CiElement@@','int',['pointer','pointer'])(ciObject(ptr(c.id)),Memory.allocUtf16String(args.new_ref));
     method('SCH_CAP.dll','?SyncRefDesManager@CMultisimExtension@@','int',['pointer','uint8'])(extension(),1);
     after=component(c.id);
   }
   if(after.ref!==args.new_ref && after.local_ref!==args.new_ref)throw new Error('Native reference rename did not persist');
-  return after;
+  if(!isSharedSupply){
+    syncInstanceReference(mgr,after,args.new_ref);
+    syncReferenceLabel(c.id,component(c.id).ref);
+  }
+  return component(c.id);
 }
 function copyComponent(args) {
   const source=component(args.ref),cache=method('SCH_CAP.dll','?GetDBCache@CMultisimExtension@@','pointer',['pointer'])(extension()),retriever=Memory.alloc(256);
@@ -134,8 +223,11 @@ function copyComponent(args) {
       method('CIRCEXP.dll','?SetLocalName@CiElement@@','int',['pointer','pointer'])(getPort(targetCi,n),Memory.allocUtf16String(name));
     }
     copyTransform(ptr(source.id),ptr(result.component.id),args.x,args.y);
+    straightenComponentLabels(result.component.id);
+    arrangeComponentLabels(result.component.id);
     const params=parameterInfo({ref:source.id});
-    for(const p of params.parameters)if(p.expression!==null)setParameter({ref:result.component.id,index:p.index,expression:p.expression});else if(p.value!==null)setParameter({ref:result.component.id,index:p.index,value:p.value});
+    for(const p of params.parameters)if(p.expression!==null&&p.expression!=='')setParameter({ref:result.component.id,index:p.index,expression:p.expression});else if(p.value!==null)setParameter({ref:result.component.id,index:p.index,value:p.value});
+    arrangeComponentLabels(result.component.id);
     return {component:component(result.component.id)};
   } finally {method('SCH_CAP.dll','??1CComponentInfoRetrieve@@','void',['pointer'])(retriever);}
 }
@@ -170,24 +262,30 @@ function removeObject(args) {
 function updateAttachedGeometry(id,attached) {
   const c=component(id),pins=c.pins;
   for(const wire of attached) {
-    let points=wire.points;
+    let points=wire.points.length>=2?wire.points.map(p=>({...p})):wire.points.length===1?[{...wire.points[0]},{...wire.points[0]}]:[{x:wire.source.x,y:wire.source.y},{x:wire.target.x,y:wire.target.y}];
     for(const end of ['source','target'])if(ownsEndpoint(c,wire[end])) {
       const pin=pins.find(p=>p.id===wire[end].id);if(!pin)throw new Error('Transformed pin lost its attachment');
       if(end==='source')points=points.slice().reverse();
       const old=points.at(-1),previous=points.at(-2),next={x:pin.x,y:pin.y};
       const corner=previous.y===old.y?{x:next.x,y:old.y}:{x:old.x,y:next.y};
       points=[...points.slice(0,-1),corner,next].filter((p,i,a)=>!i||p.x!==a[i-1].x||p.y!==a[i-1].y);
+      if(points.length===1)points.push({...points[0]});
       if(end==='source')points.reverse();
     }
+    if(points.length===1)points.push({...points[0]});
     setWirePoints(ptr(wire.id),points);
   }
   return pins;
 }
 function transformComponent(args) {
+  const hasAngle=args.angle!==undefined,hasAxis=args.axis!==undefined;
+  if(hasAngle===hasAxis)throw new Error('Provide exactly one of angle or axis');
+  if(hasAngle&&(typeof args.angle!=='number'||!Number.isFinite(args.angle)))throw new Error('Rotation must be finite');
+  if(hasAxis&&!['horizontal','vertical'].includes(args.axis))throw new Error('Invalid mirror axis');
   const c=component(args.ref),object=ptr(c.id),before=matrix(object),attached=attachedWires(c,wires().wires);
   const x=c.pins.length?c.pins.reduce((a,p)=>a+p.x,0)/c.pins.length:before[4],y=c.pins.length?c.pins.reduce((a,p)=>a+p.y,0)/c.pins.length:before[5];
   const graphic=method('Od101dll.dll','?GetGraphic@CODComponent@@QAEP','pointer',['pointer'])(object);
-  if(args.angle!==undefined)method('Od101dll.dll','?Rotate@CODGraphic@@','void',['pointer','float','float','float'])(graphic,args.angle,x,y);
+  if(hasAngle)method('Od101dll.dll','?Rotate@CODGraphic@@','void',['pointer','float','float','float'])(graphic,args.angle,x,y);
   else method('Od101dll.dll','?Scale@CODGraphic@@','void',['pointer','float','float','float','float'])(graphic,args.axis==='horizontal'?-1:1,args.axis==='vertical'?-1:1,x,y);
   method('Od101dll.dll','?MoveComponentBy@CODDiagram@@','void',['pointer','pointer','int','int'])(diagram().graph,object,0,0);
   refreshComponentValue(c.id,false);
@@ -213,7 +311,7 @@ function routeWire(args) {
     if(args.points[index].x!==x.readS32()||args.points[index].y!==y.readS32())throw new Error('Route endpoints must match the attached native connectors');
   }
   setWirePoints(ptr(w.id),args.points);
-  return wires().wires.find(w=>w.id===w.id&&w.id===args.id);
+  return wires().wires.find(w=>w.id===args.id);
 }
 function repairWireGeometry() {
   const before=wires().wires,changed=[],alignedComponents=[],alignedJunctions=[];
@@ -275,7 +373,7 @@ function pageGeometry(graph=diagram().graph) {
 }
 function selectSheet(args) {
   const sheets=readSheets(),sheet=sheets.find(s=>args.id?s.id===args.id:s.index===args.index);
-  if(!sheet)throw new Error('Schematic sheet not found');selectedSheetId=sheet.id;cachedDiagram=null;objectHandles.clear();
+  if(!sheet)throw new Error('Schematic sheet not found');selectedSheetId=sheet.id;cachedDiagram=null;
   activateSheet();
   const info=components();return {sheet,path:info.path,component_count:info.components.length};
 }
@@ -342,7 +440,7 @@ function restoreSnapshot(args) {
   const p=project();
   method('DrwEngine.dll','?SetAllModified@CProject@@','void',['pointer','uint8'])(p.proj,0);
   const closed=method('DrwEngine.dll','?FileCloseProject@CWorkspaceContainer@@','int',['pointer','pointer','uint8'])(p.container,p.proj,0);
-  selectedSheetId=null;cachedDiagram=null;objectHandles.clear();
+  selectedSheetId=null;cachedDiagram=null;
   const value=pathString(args.path);
   const opened=method('DrwEngine.dll','?FileOpen@CWorkspaceContainer@@QAE?AW4EOpenResult@1@ABVCPathString@@_N1@Z','int',['pointer','pointer','uint8','uint8'])(p.container,value,0,0);
   native('Library.dll','??1CPathString@@QAE@XZ','void',['pointer'])(value);
@@ -364,34 +462,59 @@ function masterDb() {
   const db=method('Database.dll','?GetDbPtrMaster@CDatabasePtrGroup@@','pointer',['pointer'])(group);
   if(db.isNull())throw new Error('Master component library is unavailable');return db;
 }
+function escapeAccessSql(value){return String(value).replace(/'/g,"''");}
+function escapeAccessLike(value){return escapeAccessSql(value).replace(/\[/g,'[[]').replace(/\*/g,'[*]').replace(/\?/g,'[?]').replace(/#/g,'[#]');}
 function librarySearch(args) {
-  const db=masterDb(),limit=args.limit,term=(args.query||'').replace(/'/g,"''");
+  const db=masterDb(),limit=args.limit,rawQuery=String(args.query||'');
+  const sqlTerm=escapeAccessSql(rawQuery),likeTerm=escapeAccessLike(rawQuery);
   const filters=[];
-  if(term)filters.push("c.Component_Name LIKE '*"+term+"*'");
-  if(args.family)filters.push("f.Family_Name='"+args.family.replace(/'/g,"''")+"'");
-  if(args.group)filters.push("g.Family_Group='"+args.group.replace(/'/g,"''")+"'");
-  const sql=pathString("SELECT "+(limit==null?"":"TOP "+limit+" ")+"c.Component_Name, c.Component_ID, c.Family_ID, f.Family_Name, g.Family_Group AS Group_Name FROM (SYS_COMPONENT AS c LEFT JOIN SYS_CONFIGURATION AS f ON c.Family_ID=f.Family_ID) LEFT JOIN SYS_CONFIGURATION_GROUPS AS g ON f.Family_Group_ID=g.Family_Group_ID"+(filters.length?' WHERE '+filters.join(' AND '):'')+" ORDER BY c.Component_Name");
+  if(rawQuery)filters.push("c.Component_Name LIKE '*"+likeTerm+"*'");
+  if(args.family)filters.push("f.Family_Name='"+escapeAccessSql(args.family)+"'");
+  if(args.group)filters.push("g.Family_Group='"+escapeAccessSql(args.group)+"'");
+  if(args.manufacturer)filters.push("c.Manufacturer='"+escapeAccessSql(args.manufacturer)+"'");
+  if(args.simulatable_only)filters.push("c.Kind_ID<>2 AND m.Model_ID IS NOT NULL AND m.Model_ID<>'' AND m.Model_ID<>'DUMMY'");
+  const orderExpr=rawQuery?
+    "IIF(c.Component_Name='"+sqlTerm+"',0,IIF(c.Component_Name LIKE '"+likeTerm+"*',1,2)), c.Component_Name, c.Component_ID, IIF(m.Model_ID='DUMMY',1,0), m.Sec_Order":
+    "c.Component_Name, c.Component_ID, IIF(m.Model_ID='DUMMY',1,0), m.Sec_Order";
+  const sql=pathString("SELECT c.Component_Name, c.Component_ID, c.Family_ID, c.Manufacturer AS Manufacturer_Name, CLng(c.Kind_ID) AS Kind_ID, f.Family_Name, g.Family_Group AS Group_Name, m.Model_ID AS Model_Name FROM (((SYS_COMPONENT AS c LEFT JOIN SYS_CONFIGURATION AS f ON c.Family_ID=f.Family_ID) LEFT JOIN SYS_CONFIGURATION_GROUPS AS g ON f.Family_Group_ID=g.Family_Group_ID) LEFT JOIN SYS_MAPPING_COMP_MODEL AS m ON c.Component_ID=m.Component_ID)"+(filters.length?' WHERE '+filters.join(' AND '):'')+" ORDER BY "+orderExpr);
   method('Database.dll','?OpenSQLDirectSet@CDBComponent@@','void',['pointer','pointer'])(db,sql.readPointer());
-  const results=[];
+  const results=[],seenIds=new Set();
   try {
     if(!method('Database.dll','?IsEOFRecord_SQLDirectSet@CDBComponent@@','uint8',['pointer'])(db))method('Database.dll','?MoveFirstRecord_SQLDirectSet@CDBComponent@@','void',['pointer'])(db);
     while(!method('Database.dll','?IsEOFRecord_SQLDirectSet@CDBComponent@@','uint8',['pointer'])(db)&&(limit==null||results.length<limit)) {
-      const item={};
-      for(const column of ['Component_Name','Family_Name','Group_Name']) {
+      const idKey=pathString('Component_ID'),idOut=Memory.alloc(4);idOut.writeS32(0);
+      const hasId=method('Database.dll','?GetFieldValue_SQLDirectSet@CDBComponent@@QAE_NABV?$CStringT@_WV?$StrTraitMFC_DLL@_WV?$ChTraitsCRT@_W@ATL@@@@@ATL@@AAJ@Z','uint8',['pointer','pointer','pointer'])(db,idKey,idOut);
+      native('Library.dll','??1CPathString@@QAE@XZ','void',['pointer'])(idKey);
+      const componentId=hasId?idOut.readS32():null;
+      if(componentId!==null&&seenIds.has(componentId)){
+        method('Database.dll','?MoveNextRecord_SQLDirectSet@CDBComponent@@','void',['pointer'])(db);
+        continue;
+      }
+      if(componentId!==null)seenIds.add(componentId);
+      const item={...(componentId!==null?{Component_ID:componentId}:{})};
+      for(const column of ['Component_Name','Family_Name','Group_Name','Manufacturer_Name','Model_Name']) {
         const key=pathString(column),out=pathString('');
         const ok=method('Database.dll','?GetFieldValue_SQLDirectSet@CDBComponent@@QAE_NABV?$CStringT@_WV?$StrTraitMFC_DLL@_WV?$ChTraitsCRT@_W@ATL@@@@@ATL@@AAV23@@Z','uint8',['pointer','pointer','pointer'])(db,key,out);
-        if(ok)item[column]=out.readPointer().readUtf16String();
+        item[column]=ok?out.readPointer().readUtf16String():'';
         native('Library.dll','??1CPathString@@QAE@XZ','void',['pointer'])(key);native('Library.dll','??1CPathString@@QAE@XZ','void',['pointer'])(out);
       }
-      for(const column of ['Component_ID','Family_ID']) {
+      for(const column of ['Family_ID','Kind_ID']) {
         const key=pathString(column),out=Memory.alloc(4);out.writeS32(0);
         const ok=method('Database.dll','?GetFieldValue_SQLDirectSet@CDBComponent@@QAE_NABV?$CStringT@_WV?$StrTraitMFC_DLL@_WV?$ChTraitsCRT@_W@ATL@@@@@ATL@@AAJ@Z','uint8',['pointer','pointer','pointer'])(db,key,out);
         if(ok)item[column]=out.readS32();native('Library.dll','??1CPathString@@QAE@XZ','void',['pointer'])(key);
       }
+      item.Simulatable=Boolean(item.Model_Name&&item.Model_Name.toUpperCase()!=='DUMMY'&&item.Kind_ID!==2);
       results.push(item);method('Database.dll','?MoveNextRecord_SQLDirectSet@CDBComponent@@','void',['pointer'])(db);
     }
   } finally {method('Database.dll','?CloseSQLDirectSet@CDBComponent@@','void',['pointer'])(db);}
-  return {query:args.query,results};
+  const qLower=rawQuery.toLowerCase();
+  const rank=name=>{
+    if(!qLower)return 0;
+    const n=(name||'').toLowerCase();
+    return n===qLower?0:n.startsWith(qLower)?1:2;
+  };
+  results.sort((a,b)=>rank(a.Component_Name)-rank(b.Component_Name)||(a.Component_Name||'').localeCompare(b.Component_Name||'')||((a.Component_ID||0)-(b.Component_ID||0)));
+  return {query:args.query,results:limit==null?results:results.slice(0,limit)};
 }
 function placeComponent(args) {
   masterDb();
@@ -414,7 +537,7 @@ function generateRecord(record,args) {
   validatePlacement(args);
   const requestedRef=args.ref;
   const duplicate=args.ref && components().components.some(c=>c.ref===args.ref);
-  const powerDefault=/^(GROUND|VDD|VSS|VCC|VEE|GND)$/i.test(args.name||'') &&
+  const powerDefault=/^(GROUND|VDD|VSS|VCC|VEE|GND|DGND|AGND)$/i.test(args.name||'') &&
     (args.ref==='0'||args.ref?.toUpperCase()===args.name.toUpperCase());
   if(duplicate&&!powerDefault)throw new Error('Reference already exists on this sheet');
   if(duplicate)args={...args,ref:undefined};
@@ -429,7 +552,7 @@ function generateRecord(record,args) {
   while(others.some(p=>p.ref===stem+suffix))suffix++;
   // Global supply symbols deliberately share a canonical reference. Their
   // object IDs, not a fabricated ref suffix, identify the placed instances.
-  const sharedPower=/^(VDD|VSS|VCC|VEE|GND)$/i.test(args.name||'');
+  const sharedPower=/^(VDD|VSS|VCC|VEE|GND|DGND|AGND)$/i.test(args.name||'');
   const ref=args.ref||(sharedPower?c.ref:!others.some(p=>p.ref===c.local_ref)?c.local_ref:stem+suffix);
   if(c.ref!==ref)renameComponent({ref:c.id,new_ref:ref});
   // Match standalone transform order, then resolve the final anchor.
@@ -445,15 +568,36 @@ function generateRecord(record,args) {
     const b=symbolBodyBounds(c);point={x:(b.left+b.right)/2,y:(b.top+b.bottom)/2};
   }
   method('Od101dll.dll','?MoveComponentBy@CODDiagram@@','void',['pointer','pointer','int','int'])(d.graph,object,Math.round(args.x-point.x),Math.round(args.y-point.y));
-  const parameters=[...(args.parameters||[])];
+  const initialMeta=parameterInfo({ref:c.id});
+  const parameters=(args.parameters||[]).map(p=>{
+    if(p.index!==undefined&&p.index!==null)return p;
+    const wantName=p.name,wantRole=p.role||(wantName?undefined:'value');
+    const matches=initialMeta.parameters.filter(s=>(!wantName||s.name===wantName)&&(!wantRole||s.role===wantRole));
+    if(matches.length!==1){
+      const available=initialMeta.parameters.filter(s=>s.name||s.role).map(s=>`${s.index}:${s.name||s.role}`).join(', ')||'none';
+      throw new Error(`Expected one matching parameter slot for ${JSON.stringify({name:wantName,role:wantRole})} on ${c.ref}; found ${matches.length} (available: ${available})`);
+    }
+    return {...p,index:matches[0].index};
+  });
   if('value' in args||'expression' in args){
-    const slots=parameterInfo({ref:c.id}).parameters.filter(p=>p.role==='value');
+    const slots=initialMeta.parameters.filter(p=>p.role==='value');
     if(slots.length!==1)throw new Error('Primary value slot is ambiguous; provide indexed parameters');
     if(parameters.some(p=>p.index===slots[0].index))throw new Error('Primary value supplied twice');
     const value=args.expression??args.value;
     parameters.push({index:slots[0].index,[typeof value==='string'?'expression':'value']:value});
   }
-  const primary=parameterInfo({ref:c.id}).parameters.filter(p=>p.role==='value').map(p=>p.index);
+  if(args.params){
+    for(const [paramName,val] of Object.entries(args.params)){
+      const slots=initialMeta.parameters.filter(p=>p.name===paramName);
+      if(slots.length!==1){
+        const available=initialMeta.parameters.filter(s=>s.name).map(s=>s.name).join(', ')||'none';
+        throw new Error(`Unknown parameter name ${JSON.stringify(paramName)} on ${c.ref} (available: ${available})`);
+      }
+      if(parameters.some(p=>p.index===slots[0].index))throw new Error(`Parameter ${JSON.stringify(paramName)} supplied twice`);
+      parameters.push({index:slots[0].index,[typeof val==='string'?'expression':'value']:val});
+    }
+  }
+  const primary=initialMeta.parameters.filter(p=>p.role==='value').map(p=>p.index);
   for(const parameter of parameters){
     const display='value' in parameter&&primary.includes(parameter.index)?engineeringExpression(parameter.value):null;
     setParameter({ref:c.id,...parameter},display);
@@ -513,8 +657,18 @@ function deleteText(args) {
   return removeObject(args);
 }
 function labelWire(args) {
-  const w=wires().wires.find(w=>w.id===args.id);if(!w)throw new Error('Wire does not exist');
+  if(typeof args.name!=='string'||!args.name.trim()||args.name.includes('\0'))throw new Error('Wire net name must not be empty');
+  const allWires=wires().wires,w=allWires.find(x=>x.id===args.id);if(!w)throw new Error('Wire does not exist');
   const node=method('SCH_CAP.dll','?GetNode@CIITLinkComp@@','pointer',['pointer'])(ptr(w.id));
+  const network=wireNetworks(allWires),requested=args.name.toLowerCase();
+  for(const other of allWires){
+    if(other.id===w.id||network(other.source.id)===network(w.source.id))continue;
+    const otherNode=method('SCH_CAP.dll','?GetNode@CIITLinkComp@@','pointer',['pointer'])(ptr(other.id));
+    if(!node.isNull()&&!otherNode.isNull()&&node.equals(otherNode))continue;
+    const existing=persistentWireLabel(other.id)?.name||(otherNode.isNull()?null:(nativeWireLabel(other.id).user_named?returnedString('CIRCEXP.dll','?GetLocalName@CiElement@@',otherNode):null));
+    if(existing&&existing.toLowerCase()===requested)
+      throw new Error(`Net name ${JSON.stringify(args.name)} already exists on another net; Multisim requires unique wire net names (connect with a wire, junction, power symbol, or On-Page connector instead).`);
+  }
   const connection=basePointer(ptr(w.id),'.?AVCElectricalConnectionBase@@');
   const container=method('SchematicCapture.dll','?GetNetContainerFromTreeInstance@CElectricalConnectionBase@@','pointer',['pointer'],'mscdecl')(treeInstance());
   const proxy=Memory.alloc(128),pool=Memory.alloc(64);
@@ -527,13 +681,15 @@ function labelWire(args) {
   method('DrwEngine.dll','??1CTreeInstanceProxy@@','void',['pointer'])(proxy);method('Library.dll','??1CPoolString@@','void',['pointer'])(pool);
   let label=method('SCH_CAP.dll','?GetNodeText@CIITLinkComp@@','pointer',['pointer'])(ptr(w.id));
   if(label.isNull()) {
+    const anchor=w.points[0]||w.source;
     label=allocateObject('CODNodeTextComp','??0CODNodeTextComp@@QAE@PB_W@Z',[Memory.allocUtf16String(args.name)],['pointer']);
-    method('Od101dll.dll','?AddComponent@CODDiagram@@','void',['pointer','pointer','int','int','pointer','uint8'])(diagram().graph,label,w.points[0].x,w.points[0].y-18,treeInstance(),0);
+    method('Od101dll.dll','?AddComponent@CODDiagram@@','void',['pointer','pointer','int','int','pointer','uint8'])(diagram().graph,label,anchor.x,anchor.y-18,treeInstance(),0);
     method('SCH_CAP.dll','?SetNodeText@CIITLinkComp@@','void',['pointer','pointer'])(ptr(w.id),label);
     method('Od101dll.dll','?AddLinkComp@CODNodeTextComp@@','void',['pointer','pointer'])(label,ptr(w.id));
   }
   method('Od101dll.dll','?SetTextNoUpdate@CODTextComp@@','void',['pointer','pointer'])(label,Memory.allocUtf16String(args.name));
-  return {id:w.id,node:node.toString(),name:returnedString('CIRCEXP.dll','?GetLocalName@CiElement@@',node),label:label.toString()};
+  const resolvedName=node.isNull()?(persistentWireLabel(w.id)?.name||args.name):(returnedString('CIRCEXP.dll','?GetLocalName@CiElement@@',node)||persistentWireLabel(w.id)?.name||args.name);
+  return {id:w.id,node:node.toString(),name:resolvedName,label:label.toString(),topology_changed:true};
 }
 function modelInfo(args) {
   const ci=ciObject(ptr(component(args.ref).id)),model=method('CIRCEXP.dll','?GetModel@CiElement@@','pointer',['pointer'])(ci),attributes=[];
@@ -981,14 +1137,16 @@ function moveJunction(args) {
   method('Od101dll.dll','?MoveComponentBy@CODDiagram@@','void',['pointer','pointer','int','int'])(diagram().graph,object,args.x-before.x,args.y-before.y);
   const after=connectorGeometry(object);
   for(const w of attached){
-    let points=w.points;
+    let points=w.points.length>=2?w.points.map(p=>({...p})):w.points.length===1?[{...w.points[0]},{...w.points[0]}]:[{x:w.source.x,y:w.source.y},{x:w.target.x,y:w.target.y}];
     for(const end of ['source','target'])if(w[end].id===args.id){
       if(end==='source')points=points.slice().reverse();
       const old=points.at(-1),previous=points.at(-2),next={x:after.x,y:after.y};
       const corner=previous.y===old.y?{x:next.x,y:old.y}:{x:old.x,y:next.y};
       points=[...points.slice(0,-1),corner,next].filter((p,i,a)=>!i||p.x!==a[i-1].x||p.y!==a[i-1].y);
+      if(points.length===1)points.push({...points[0]});
       if(end==='source')points.reverse();
     }
+    if(points.length===1)points.push({...points[0]});
     setWirePoints(ptr(w.id),points);
   }
   const current=wires().wires.filter(w=>w.source.id===args.id||w.target.id===args.id);
@@ -997,7 +1155,8 @@ function moveJunction(args) {
 }
 function connectEndpoint(args) {
   const resolve=e=>{
-    if(e.ref){const c=component(e.ref),p=c.pins.find(p=>p.name===e.pin);if(!p)throw new Error('Pin '+JSON.stringify(e.pin)+' does not exist on '+c.ref+'; available pins: '+c.pins.map(p=>p.name).join(', '));return ptr(p.id);}
+    const ref=e.component_id||e.ref;
+    if(ref){const c=component(ref),p=c.pins.find(p=>p.name===e.pin);if(!p)throw new Error('Pin '+JSON.stringify(e.pin)+' does not exist on '+c.ref+'; available pins: '+c.pins.map(p=>p.name).join(', '));return ptr(p.id);}
     if(!enumerate().objects.some(o=>o.id===e.junction_id&&/CODPinComp/.test(o.name)))throw new Error('Junction does not exist on the selected sheet: '+e.junction_id);return ptr(e.junction_id);
   };
   const source=resolve(args.source),target=resolve(args.target);
@@ -1015,10 +1174,10 @@ function connectEndpoint(args) {
 }
 function reconnectWire(args) {
   const old=wires().wires.find(w=>w.id===args.id);if(!old)throw new Error('Wire not found');
-  const endpoint=end=>old[end].ref?{ref:old[end].ref,pin:old[end].pin}:{junction_id:old[end].id};
+  const endpoint=end=>old[end].ref?{ref:old[end].component_id||old[end].ref,pin:old[end].pin}:{junction_id:old[end].id};
   const source=args.source||endpoint('source'),target=args.target||endpoint('target');
   // Validate named endpoint resolution before deleting the previous native wire.
-  for(const e of [source,target])if(e.ref){if(!component(e.ref).pins.some(p=>p.name===e.pin))throw new Error('Replacement endpoint pin not found');}
+  for(const e of [source,target]){const ref=e.component_id||e.ref;if(ref){if(!component(ref).pins.some(p=>p.name===e.pin))throw new Error('Replacement endpoint pin not found');}}
   removeObject({id:old.id});return connectEndpoint({source,target,points:args.points});
 }
 function exportImage(args) {
@@ -1114,11 +1273,39 @@ function simulationInfo() {
   return {session:session.toString(),state:method('SCH_CAP.dll','?GetSimulationState@CMultisimExtension@@','int',['pointer'])(ext),remote_initialized:!!method('SpiceifsSch.dll','?IsSimulationInitialized@CSchSpiceSession@SpiceifsSch@@','uint8',['pointer'])(session),status,error_count:actualErrors.length,errors:actualErrors,native_status_record_count:errorCount,native_status_records:errors,error_text:instanceString('SHARUTIL.dll','?GetErrorString@CGuiFEObj@@',frontend)};
 }
 function interactiveDisplays() {
-  const order=[19,16,15,17,13,14,18],digits={'1111110':'0','0110000':'1','1101101':'2','1111001':'3','0110011':'4','1011011':'5','1011111':'6','1110000':'7','1111111':'8','1111011':'9'};
-  return components().components.filter(c=>['A','B','C','D','E','F','G'].every(name=>c.pins.some(p=>p.name===name))).flatMap(c=>{
-    const info=parameterInfo({ref:c.id});if(!/^SEVEN_SEG_COM_A$/.test(info.info[1]||''))return [];
-    const segments=order.map(index=>!!method('Od101dll.dll','?GetSubComponentPrp@CIITSymbolComp@@QAEKW4GRAPHICPROPERTY@@JPAVCTreeInstance@@@Z','uint',['pointer','int','int','pointer'])(ptr(c.id),0,index,treeInstance()));
-    return [{ref:c.ref,model:info.info[1],segment_order:'abcdefg',segments,active:segments.some(Boolean),decoded:digits[segments.map(Number).join('')]??null,source:'native runtime graphic properties'}];
+  const digits={'1111110':'0','0110000':'1','1101101':'2','1111001':'3','0110011':'4','1011011':'5','1011111':'6','1110000':'7','1111111':'8','1111011':'9'};
+  const hexDigits={...digits,'1110011':'9','1110111':'A','0011111':'B','1001110':'C','0111101':'D','1001111':'E','1000111':'F'};
+  const getProperty=method('Od101dll.dll','?GetSubComponentPrp@CIITSymbolComp@@QAEKW4GRAPHICPROPERTY@@JPAVCTreeInstance@@@Z','uint',['pointer','int','int','pointer']);
+  const tree=treeInstance();
+  return components().components.flatMap(c=>{
+    if(![1,2,4,8].includes(c.pins.length))return [];
+    if(c.pins.length===2&&!c.pins.some(pin=>pin.name==='A'))return [];
+    const object=ptr(c.id),info=componentLibraryInfo(ciObject(object)),model=info[1]||'';
+    const visible=index=>getProperty(object,0,index,tree)===1;
+    const result={ref:c.ref,model,source:'native runtime graphic properties'};
+    if(/^SEVEN_SEG_COM_[AK](?:_[A-Z]+)?$/i.test(model)||/^DCD_HEX(?:_DIG)?(?:_[A-Z]+)?$/i.test(model)){
+      const hex=/^DCD_HEX/i.test(model);
+      const order=hex?[9,8,10,11,6,5,7]:[19,16,15,17,13,14,18];
+      const segments=order.map(visible),pattern=segments.map(Number).join('');
+      return [{...result,kind:hex?'hex_display':'seven_segment',segment_order:'abcdefg',segments,
+        active:segments.some(Boolean),decoded:(hex?hexDigits:digits)[pattern]??null}];
+    }
+    if(/^LED_[A-Z]+$/i.test(model)&&info[0]==='LED'){
+      const lit=visible(12)&&visible(13);
+      return [{...result,kind:'led',active:lit,lit,state:lit?'on':'off'}];
+    }
+    if((/^LED_[A-Z]+_RATED$/i.test(model)&&info[3]==='LED_RATED')||(/^LED\d+_[A-Z]+$/i.test(model)&&info[3]==='LED')){
+      const symbol=basePointer(object,'.?AVCIITAnimationSymbolComp@@');
+      const layer=method('Od101dll.dll','?GetLayerForTreeInstance@CIITAnimationSymbolComp@@','int',['pointer','pointer'])(symbol,tree);
+      const state=layer===1?'on':layer===0?'off':layer>1&&info[3]==='LED_RATED'?'blown':'unknown';
+      const lit=state==='on';
+      return [{...result,kind:'led',active:lit,lit,state,source:'native runtime animation layer'}];
+    }
+    if(/^PROBE_DIG(?:_[A-Z]+)?$/i.test(model)&&c.pins.length===1){
+      const active=visible(6);
+      return [{...result,kind:'digital_probe',active,level:c.pins[0].connections?Number(active):null}];
+    }
+    return [];
   });
 }
 function exportInteractiveImage(args) {
@@ -1127,7 +1314,7 @@ function exportInteractiveImage(args) {
   const displays=interactiveDisplays();
   if(args.active_component){
     const selected=displays.find(d=>d.ref===args.active_component);
-    if(!selected)throw new Error('active_component must identify a supported SEVEN_SEG_COM_A display on this sheet');
+    if(!selected)throw new Error('active_component must identify a supported display, LED, or digital probe on this sheet');
     if(selected.decoded===null)return {ready:false,state:state.state,display_states:displays};
   }
   const image=exportImage({...args,interactive:true});
@@ -1208,6 +1395,30 @@ function interactiveCommand(args) {
   if(!queued)throw new Error('Native interactive command could not be queued');
   return {action:args.action,command_id:id,requested:true};
 }
+function resolveDcSource(netlistText,sourceRef) {
+  const raw=String(sourceRef||'').trim();
+  if(!raw)throw new Error('DC sweep requires dc_source');
+  const escaped=raw.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const headerRe=new RegExp(`^\\*##\\s*Multisim Component\\s+${escaped}\\s*##\\*\\s*$`,'im');
+  const headerMatch=headerRe.exec(netlistText);
+  if(headerMatch){
+    const rest=netlistText.slice(headerMatch.index+headerMatch[0].length);
+    for(const line of rest.split(/\r?\n/)){
+      const trimmed=line.trim();
+      if(!trimmed)continue;
+      if(trimmed.startsWith('*##'))break;
+      if(trimmed.startsWith('*')||trimmed.startsWith('.'))continue;
+      const m=trimmed.match(/^([vi]\S+)\s+/i);
+      if(m)return m[1];
+    }
+  }
+  for(const candidate of [raw,'v'+raw,'i'+raw]){
+    const cardRe=new RegExp(`^(${candidate.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})\\s+`,'im');
+    const m=cardRe.exec(netlistText);
+    if(m&&/^[vi]/i.test(m[1]))return m[1];
+  }
+  return raw;
+}
 function simulate(args) {
   const session=simSession();
   if(args.action==='stop')return {result:method('SpiceifsSch.dll','?StopSimulation@CSchSpiceSession@SpiceifsSch@@','int',['pointer'])(session),...simulationInfo()};
@@ -1245,7 +1456,11 @@ function simulate(args) {
     const configured=shell('saved-options',args.saved_commands.options_command);
     if(configured.result!==0||configured.errors.length)return {failed:true,stage:'saved-options',trace,...simulationInfo()};
   }
-  const command=args.saved_commands?args.saved_commands.command:args.analysis==='op'?'op':args.analysis==='ac'?`ac ${args.ac_sweep} ${args.ac_points} ${args.ac_start} ${args.ac_stop}`:`tran ${args.step} ${args.stop}${args.use_initial_conditions?' uic':''}`;
+  const command=args.saved_commands?args.saved_commands.command:
+    args.analysis==='op'?'op':
+    args.analysis==='ac'?`ac ${args.ac_sweep} ${args.ac_points} ${args.ac_start} ${args.ac_stop}`:
+    args.analysis==='dc'?`dc ${resolveDcSource(text.content,args.dc_source)} ${args.dc_start} ${args.dc_stop} ${args.dc_step}`:
+    `tran ${args.step} ${args.stop}${args.use_initial_conditions?' uic':''}`;
   send({analysis_started:true,command});
   const completed=shell('analysis',command);
   const errors=trace.filter(t=>t.stage==='load-netlist'||t.stage==='analysis').flatMap(t=>t.errors);
@@ -1288,10 +1503,114 @@ function contentBounds() {
   for(const w of wires().wires)if(w.points.length)rects.push({left:Math.min(...w.points.map(p=>p.x)),top:Math.min(...w.points.map(p=>p.y)),right:Math.max(...w.points.map(p=>p.x)),bottom:Math.max(...w.points.map(p=>p.y))});
   return rects.length?{left:Math.min(...rects.map(r=>r.left)),top:Math.min(...rects.map(r=>r.top)),right:Math.max(...rects.map(r=>r.right)),bottom:Math.max(...rects.map(r=>r.bottom))}:null;
 }
+function spiceNetName(object,isWire=false) {
+  const tree=treeInstance(),generator=method('SCH_CAP.dll','?GetNetlistGeneration@CMultisimExtension@@','pointer',['pointer'])(extension());
+  const type=isWire?'PAVCSCH_CAPElectricalConnection':'PBVCiPort';
+  const getName=method('SCH_CAP.dll',`?GetNetName@CNetlistGeneration@@QAE_NPAVCTreeInstance@@${type}@@_NAAV`,'uint8',['pointer','pointer','pointer','uint8','pointer','pointer']);
+  const value=pathString(''),mode=Memory.alloc(1);mode.writeU8(0);
+  try {
+    return getName(generator,tree,object,0,value,mode)?value.readPointer().readUtf16String()||null:null;
+  } finally {native('Library.dll','??1CPathString@@QAE@XZ','void',['pointer'])(value);}
+}
+function connectivityInfo(rawComponents=null,rawWires=null) {
+  const allWires=rawWires||wires().wires,allComponents=rawComponents||components().components;
+  const wireNetByConnector=new Map();
+  const wireEntries=allWires.map(w=>{
+    const n=method('SCH_CAP.dll','?GetNode@CIITLinkComp@@','pointer',['pointer'])(ptr(w.id));
+    const connection=basePointer(ptr(w.id),'.?AVCSCH_CAPElectricalConnection@@');
+    const name=spiceNetName(connection,true)??persistentWireLabel(w.id)?.name??(n.isNull()?null:returnedString('CIRCEXP.dll','?GetLocalName@CiElement@@',n)||null);
+    if(name!==null){wireNetByConnector.set(w.source.id,name);wireNetByConnector.set(w.target.id,name);}
+    return {id:w.id,node:n.toString(),name,source:w.source,target:w.target};
+  });
+  const nets=Object.create(null);
+  const compEntries=allComponents.map(c=>{
+    const ci=ciObject(ptr(c.id)),count=method('CIRCEXP.dll','?GetPortCount@CiComponent@@','int',['pointer'])(ci);
+    const byName=new Map(),byIndex=[];
+    for(let idx=0;idx<count;idx++){
+      const port=method('CIRCEXP.dll','?GetPort@CiComponent@@QBEPAVCiPort@@H@Z','pointer',['pointer','int'])(ci,idx);
+      const portName=returnedString('CIRCEXP.dll','?GetLocalName@CiElement@@',port);
+      const node=method('CIRCEXP.dll','?GetNode@CiComponent@@','pointer',['pointer','int'])(ci,idx);
+      const netName=spiceNetName(port)??(node.isNull()?null:returnedString('CIRCEXP.dll','?GetLocalName@CiElement@@',node)||null);
+      const item={node:node.toString(),net:netName};
+      byName.set(portName,item);byIndex.push(item);
+    }
+    const pins=c.pins.map((p,idx)=>{
+      const portEntry=byName.get(p.name)||(c.pins.length===count?byIndex[idx]:null);
+      const netName=portEntry?.net??wireNetByConnector.get(p.id)??null;
+      const signal=netName!==null?'V('+netName+')':null;
+      if(netName!==null){
+        if(!nets[netName])nets[netName]=[];
+        nets[netName].push({ref:c.ref,component_id:c.id,pin:p.name});
+      }
+      return {name:p.name,id:p.id,node:portEntry?portEntry.node:ptr(0).toString(),net:netName,signal};
+    });
+    return {id:c.id,ref:c.ref,pins,nodes:pins.map(p=>p.node)};
+  });
+  return {wires:wireEntries,components:compEntries,nets};
+}
+function translateSheet(args) {
+  const dx=args.dx,dy=args.dy;
+  if(!Number.isInteger(dx)||!Number.isInteger(dy)||dx<-2147483648||dx>2147483647||dy<-2147483648||dy>2147483647)
+    throw new Error('dx and dy must be signed 32-bit integers');
+  const beforeWires=wires().wires,comps=components().components,d=diagram();
+  const children=listChildren(d.composite);
+  const junctions=children.filter(o=>rtti(o).name==='.?AVCODPinComp@@');
+  const texts=children.filter(o=>rtti(o).name==='.?AVCODTextComp@@');
+  const nodeTexts=children.filter(o=>rtti(o).name==='.?AVCODNodeTextComp@@').map(o=>({ptr:o,before:matrix(o)}));
+  if(dx===0&&dy===0)return {dx:0,dy:0,moved_components:0,moved_junctions:0,moved_wires:0,moved_texts:0,content_bounds:contentBounds(),topology_changed:false};
+  const moveNative=method('Od101dll.dll','?MoveComponentBy@CODDiagram@@','void',['pointer','pointer','int','int']);
+  const context=Process.getModuleByName('Od101dll.dll').getExportByName('?DefIC@@3VCODInstContext@@A');
+  const updateComp=method('Od101dll.dll','?Update@CODComponent@@UAEXAAVCODInstContext@@_N@Z','void',['pointer','pointer','uint8']);
+  for(const c of comps)moveNative(d.graph,ptr(c.id),dx,dy);
+  for(const j of junctions)moveNative(d.graph,j,dx,dy);
+  for(const t of texts){moveNative(d.graph,t,dx,dy);updateComp(t,context,0);}
+  for(const w of beforeWires){
+    const base=w.points.length>=2?w.points:w.points.length===1?[w.points[0],w.points[0]]:[{x:w.source.x,y:w.source.y},{x:w.target.x,y:w.target.y}];
+    setWirePoints(ptr(w.id),base.map(p=>({x:p.x+dx,y:p.y+dy})));
+  }
+  for(const nt of nodeTexts){
+    const cur=matrix(nt.ptr),remX=dx-Math.round(cur[4]-nt.before[4]),remY=dy-Math.round(cur[5]-nt.before[5]);
+    if(remX!==0||remY!==0){moveNative(d.graph,nt.ptr,remX,remY);updateComp(nt.ptr,context,0);}
+  }
+  if(wires().wires.some(w=>!routeEndsMatch(w)))repairWireGeometry();
+  return {dx,dy,moved_components:comps.length,moved_junctions:junctions.length,moved_wires:beforeWires.length,moved_texts:texts.length,content_bounds:contentBounds(),topology_changed:false};
+}
+function fitSheet(args={}) {
+  const margin=args.margin===undefined?36:args.margin,resize=args.resize===undefined?true:args.resize;
+  if(!Number.isInteger(margin)||margin<0||margin>2147483647)throw new Error('margin must be a non-negative integer');
+  if(typeof resize!=='boolean')throw new Error('resize must be boolean');
+  const before_bounds=contentBounds();
+  if(!before_bounds)return {shifted:{dx:0,dy:0},before_bounds:null,after_bounds:null,page:pageGeometry(),resized:false,topology_changed:false};
+  const dx=before_bounds.left<margin?Math.ceil((margin-before_bounds.left)/9)*9:0;
+  const dy=before_bounds.top<margin?Math.ceil((margin-before_bounds.top)/9)*9:0;
+  if(dx>0||dy>0)translateSheet({dx,dy});
+  const after_bounds=contentBounds();
+  let page=pageGeometry(),resized=false;
+  if(resize&&after_bounds){
+    const neededW=Math.ceil((after_bounds.right+margin)/9)*9;
+    const neededH=Math.ceil((after_bounds.bottom+margin)/9)*9;
+    if(neededW>page.width||neededH>page.height){
+      sheetSize({width:Math.max(page.width,neededW),height:Math.max(page.height,neededH)});
+      page=pageGeometry();
+      resized=true;
+    }
+  }
+  return {shifted:{dx,dy},before_bounds,after_bounds,page,resized,topology_changed:false};
+}
 function circuitState(args={}) {
-  const state=componentBounds(),page=pageGeometry();
+  const state=componentBounds(),page=pageGeometry(),rawWires=wires().wires;
   if(args.include_parameters)for(const c of state.components){const p=parameterInfo({ref:c.id},c);c.parameters=p.parameters;c.library={family:p.info[0],name:p.info[1],symbol_family:p.info[2],model:p.info[3]};}
-  return {sheets:readSheets(),page,components:state.components,wires:wires().wires,texts:textObjects(),content_bounds:contentBounds(),
+  if(args.include_nets){
+    const conn=connectivityInfo(state.components,rawWires);
+    const wireNets=new Map(conn.wires.map(w=>[w.id,w.name]));
+    const compPins=new Map(conn.components.map(c=>[c.id,new Map(c.pins.map(p=>[p.id,p]))]));
+    for(const w of rawWires)w.net=wireNets.get(w.id)??null;
+    for(const c of state.components){
+      const pinMap=compPins.get(c.id);
+      if(pinMap)for(const p of c.pins){const info=pinMap.get(p.id);p.net=info?.net??null;p.signal=info?.signal??null;}
+    }
+  }
+  return {sheets:readSheets(),page,components:state.components,wires:rawWires,texts:textObjects(),content_bounds:contentBounds(),
     ...(args.include_persistence?persistenceSheetData(state):{})};
 }
 function projectCircuitState(args={}) {
@@ -1408,43 +1727,64 @@ function sequenceValue(value,bindings){
   }));
 }
 function validatePlacement(a){
-  if('angle' in a&&!Number.isFinite(a.angle))throw new Error('Rotation must be finite');
+  if('angle' in a&&(typeof a.angle!=='number'||!Number.isFinite(a.angle)))throw new Error('Rotation must be finite');
   if('mirror_axis' in a&&!['horizontal','vertical'].includes(a.mirror_axis))throw new Error('Invalid mirror axis');
   if('value' in a&&'expression' in a)throw new Error('Provide value or expression, not both');
   if('expression' in a&&(typeof a.expression!=='string'||!a.expression.trim()||a.expression.includes('\0')))throw new Error('Invalid expression');
-  if('value' in a&&!(typeof a.value==='string'&&a.value.trim()&&!a.value.includes('\0'))&&!Number.isFinite(a.value))throw new Error('Invalid placement value');
+  if('value' in a&&!(typeof a.value==='string'&&a.value.trim()&&!a.value.includes('\0'))&&!(typeof a.value==='number'&&Number.isFinite(a.value)))throw new Error('Invalid placement value');
+  if('params' in a&&a.params!==undefined&&a.params!==null){
+    if(typeof a.params!=='object'||Array.isArray(a.params))throw new Error('Invalid params');
+    for(const [k,v] of Object.entries(a.params)){
+      if(!k||k.includes('\0'))throw new Error('Invalid parameter name');
+      if(!(typeof v==='string'&&v.trim()&&!v.includes('\0'))&&!(typeof v==='number'&&Number.isFinite(v)))throw new Error('Invalid parameter value for '+k);
+    }
+  }
 }
 function validateSequenceOperation(op,a){
   if(op==='remove'){for(const [alias,key] of [['object_id','id'],['component_ref','ref']])if(alias in a){if(key in a&&a[key]!==a[alias])throw new Error('Conflicting '+alias+' and '+key);a[key]=a[alias];delete a[alias];}}
   const required={place:['name','x','y'],move:['ref','dx','dy'],alignPin:['ref','pin','x','y'],moveLabel:['ref','x','y'],transform:['ref'],
     wire:['source','target'],connectEndpoint:['source','target'],route:['id','points'],autoWire:['id'],
-    setParameter:['ref','index'],addText:['text','x','y'],updateText:['id'],deleteText:['id'],updateSheet:[],updatePort:['id'],moveJunction:['id','x','y'],labelWire:['id','name'],splitWire:['id','x','y'],
-    rename:['ref','new_ref'],remove:[],connectTouching:[],sheetSize:['width','height'],sheetTitle:['title'],repairWireGeometry:[]};
+    setParameter:['ref'],addText:['text','x','y'],updateText:['id'],deleteText:['id'],updateSheet:[],updatePort:['id'],moveJunction:['id','x','y'],labelWire:['id','name'],splitWire:['id','x','y'],
+    rename:['ref','new_ref'],remove:[],connectTouching:[],sheetSize:['width','height'],sheetTitle:['title'],repairWireGeometry:[],fitSheet:[],translateSheet:['dx','dy']};
   if(!(op in required))throw new Error('Operation requires an individual native transaction: '+op);
   for(const k of required[op])if(!(k in a))throw new Error(op+' requires '+k);
-  for(const k of ['ref','id','name','text','family','group','manufacturer','title','page','new_ref','expression','pin'])
-    if(k in a&&(typeof a[k]!=='string'||a[k].includes('\0')))throw new Error('Invalid '+k);
-  for(const k of ['x','y','dx','dy','index','width','height'])if(k in a&&(!Number.isInteger(a[k])||a[k]<-2147483648||a[k]>2147483647))throw new Error('Invalid '+k);
+  for(const k of ['ref','id','name','text','family','group','manufacturer','title','page','new_ref','expression','pin','role'])
+    if(k in a&&a[k]!==undefined&&(typeof a[k]!=='string'||a[k].includes('\0')))throw new Error('Invalid '+k);
+  for(const k of ['ref','id','new_ref','name','pin','role'])
+    if(k in a&&a[k]!==undefined&&!a[k])throw new Error('Invalid '+k);
+  if(op==='labelWire'&&!a.name.trim())throw new Error('Invalid name');
+  for(const k of ['x','y','dx','dy','index','width','height','margin'])if(k in a&&a[k]!==undefined&&(!Number.isInteger(a[k])||a[k]<-2147483648||a[k]>2147483647))throw new Error('Invalid '+k);
   if(op==='place'&&!['origin','center','pin'].includes(a.anchor||'origin'))throw new Error('Invalid placement anchor');
   if(op==='place')validatePlacement(a);
-  if(op==='transform'&&(!(('angle' in a)||('axis' in a))||('angle' in a&&(!Number.isFinite(a.angle)))||('axis' in a&&!['horizontal','vertical'].includes(a.axis))))throw new Error('Invalid transform');
+  if(op==='transform'&&((('angle' in a)===('axis' in a))||('angle' in a&&(typeof a.angle!=='number'||!Number.isFinite(a.angle)))||('axis' in a&&!['horizontal','vertical'].includes(a.axis))))throw new Error('Invalid transform');
   if(op==='remove'&&!a.ref&&!a.id)throw new Error('remove requires ref or id');
   if(op==='updateText'&&!['text','x','y'].some(k=>k in a))throw new Error('updateText requires text, x or y');
   if(op==='updatePort'&&!['name','x','y'].some(k=>k in a))throw new Error('updatePort requires name, x or y');
   if(op==='updateSheet'&&!['title','page','width','height'].some(k=>k in a))throw new Error('updateSheet requires title, page, width or height');
   if(op==='updateSheet'&&['width','height'].some(k=>k in a&&(a[k]<=0||Math.round(a[k]/96*25.4*500000)>2147483647)))throw new Error('Sheet dimensions exceed the native signed 32-bit CUTRect work-area format');
-  if(op==='setParameter'&&((('value' in a)===('expression' in a))||a.index<0||a.index>2147483647||('value' in a&&!Number.isFinite(a.value))))throw new Error('Invalid parameter value or index');
+  if(op==='setParameter'){
+    const hasVal='value' in a&&a.value!==undefined,hasExpr='expression' in a&&a.expression!==undefined;
+    if(hasVal===hasExpr)throw new Error('Invalid parameter value or index');
+    if('index' in a&&a.index!==undefined&&(a.index<0||a.index>2147483647))throw new Error('Invalid parameter value or index');
+    if(hasVal&&(typeof a.value!=='number'||!Number.isFinite(a.value)))throw new Error('Invalid parameter value or index');
+    if(hasExpr&&!a.expression.trim())throw new Error('Invalid parameter value or index');
+  }
+  if(op==='fitSheet'&&((('margin' in a)&&a.margin!==undefined&&a.margin<0)||(('resize' in a)&&a.resize!==undefined&&typeof a.resize!=='boolean')))throw new Error('Invalid fitSheet arguments');
   if(op==='sheetSize'&&['width','height'].some(k=>a[k]<=0||a[k]>2147483647))throw new Error('Sheet dimensions must be positive signed 32-bit integers');
   if('points' in a&&(!Array.isArray(a.points)||a.points.length<2||a.points.some(p=>!p||['x','y'].some(k=>!Number.isInteger(p[k])||p[k]<-2147483648||p[k]>2147483647))))throw new Error('Invalid wire route');
-  if('parameters' in a){if(!Array.isArray(a.parameters))throw new Error('Invalid parameters');a.parameters.forEach(p=>validateSequenceOperation('setParameter',{ref:'placement',...p}));}
-  for(const k of ['source','target'])if(k in a){const e=a[k];if(!e||!(typeof e.junction_id==='string'||(typeof e.ref==='string'&&typeof e.pin==='string')))throw new Error('Invalid '+k+' endpoint');}
+  if('parameters' in a){if(!Array.isArray(a.parameters))throw new Error('Invalid parameters');a.parameters.forEach(p=>{if(!p||typeof p!=='object')throw new Error('Invalid parameters');validateSequenceOperation('setParameter',{ref:'placement',...p});});}
+  for(const k of ['source','target'])if(k in a){const e=a[k];if(!e||!((typeof e.junction_id==='string'&&e.junction_id)||(((typeof e.ref==='string'&&e.ref)||(typeof e.component_id==='string'&&e.component_id))&&typeof e.pin==='string'&&e.pin)))throw new Error('Invalid '+k+' endpoint');}
   if('refs' in a&&(!Array.isArray(a.refs)||a.refs.length<1||a.refs.some(r=>typeof r!=='string'||!r)))throw new Error('Invalid component refs');
 }
 const cancelledEditSequences=new Set();
+const terminatedEditSequences=new Set();
 let activeEditSequence=null;
 function receiveEditCancellation(){
   recv('cancel-edit-sequence',message=>{
-    if(message.token===activeEditSequence||jobs.some(job=>job.name==='editSequence'&&job.args.cancel_token===message.token))cancelledEditSequences.add(message.token);
+    if(message&&typeof message.token==='string'&&message.token&&!terminatedEditSequences.has(message.token)){
+      cancelledEditSequences.add(message.token);
+      while(cancelledEditSequences.size>64)cancelledEditSequences.delete(cancelledEditSequences.values().next().value);
+    }
     receiveEditCancellation();
   });
 }
@@ -1453,6 +1793,7 @@ function editSequence(args){
   if(!Array.isArray(args.operations)||args.operations.length<1||args.operations.length>8)throw new Error('Native edit slices support 1 to 8 operations');
   const bindings={...(args.bindings||{})},results=[];
   activeEditSequence=args.cancel_token||null;
+  let failed=false;
   try{
   for(let index=0;index<args.operations.length;index++){
     const op=args.operations[index];
@@ -1467,10 +1808,19 @@ function editSequence(args){
         result=move({ref:c.id,dx:a.x-pin.x,dy:a.y-pin.y});
       }else result=op.operation==='move'?move(a):op.operation==='wire'?wire(a):editorHandlers[op.operation](a);
       results.push(result);if(op.bind)bindings[op.bind]=result;
-    }catch(error){return {failed:true,failed_operation_index:index,error:String(error),results,bindings};}
+    }catch(error){failed=true;return {failed:true,failed_operation_index:index,error:String(error),results,bindings};}
   }
   return {failed:false,results,bindings};
-  }finally{cancelledEditSequences.delete(args.cancel_token);activeEditSequence=null;}
+  }finally{
+    if(args.cancel_token){
+      if(failed||cancelledEditSequences.has(args.cancel_token)){
+        terminatedEditSequences.add(args.cancel_token);
+        while(terminatedEditSequences.size>64)terminatedEditSequences.delete(terminatedEditSequences.values().next().value);
+      }
+      cancelledEditSequences.delete(args.cancel_token);
+    }
+    activeEditSequence=null;
+  }
 }
 const editorHandlers={
   editSequence,
@@ -1480,12 +1830,20 @@ const editorHandlers={
       const port=method('CIRCEXP.dll','?GetPort@CiComponent@@QBEPAVCiPort@@H@Z','pointer',['pointer','int'])(ci,n);
       if(returnedString('CIRCEXP.dll','?GetLocalName@CiElement@@',port)!==args.pin)continue;
       const node=method('CIRCEXP.dll','?GetNode@CiComponent@@','pointer',['pointer','int'])(ci,n);
-      if(node.isNull())throw new Error('Pin has no electrical node: '+c.ref+'.'+args.pin);
-      return {ref:c.ref,pin:args.pin,signal:'V('+returnedString('CIRCEXP.dll','?GetLocalName@CiElement@@',node)+')'};
+      let netName=spiceNetName(port)??(node.isNull()?null:returnedString('CIRCEXP.dll','?GetLocalName@CiElement@@',node)||null);
+      if(netName===null){
+        const pinObj=c.pins.find(p=>p.name===args.pin);
+        if(pinObj){
+          const attached=wires().wires.find(w=>w.source.id===pinObj.id||w.target.id===pinObj.id);
+          if(attached)netName=persistentWireLabel(attached.id)?.name??null;
+        }
+      }
+      if(netName===null)throw new Error('Pin has no electrical node: '+c.ref+'.'+args.pin);
+      return {ref:c.ref,component_id:c.id,pin:args.pin,net:netName,signal:'V('+netName+')'};
     }
     throw new Error('Electrical pin not found: '+c.ref+'.'+args.pin);
   },
-  wiringOptions,connectTouching,autoWire:rerouteNativeWire,
+  wiringOptions,connectTouching,autoWire:rerouteNativeWire,fitSheet,translateSheet,
   componentBounds,synchronizeGraphics,circuitState,projectCircuitState,verifySavedCopy,componentLabels,moveLabel:moveComponentLabel,
   simulationCommand:args=>({result:method('SpiceifsSch.dll','?ExecuteShellCmd@CSchSpiceSession@SpiceifsSch@@','int',['pointer','pointer'])(simSession(),Memory.allocUtf16String(args.command)),...simulationInfo()}),
   cleanupNumericSession:()=>{
@@ -1520,7 +1878,7 @@ const editorHandlers={
   },
   wireDetails:args=>wires().wires.filter(w=>!args.id||w.id===args.id),
   initializeProject,
-  connectivity:()=>({wires:wires().wires.map(w=>{const n=method('SCH_CAP.dll','?GetNode@CIITLinkComp@@','pointer',['pointer'])(ptr(w.id));return {id:w.id,node:n.toString(),name:n.isNull()?null:returnedString('CIRCEXP.dll','?GetLocalName@CiElement@@',n)};}),components:components().components.map(c=>({ref:c.ref,nodes:c.pins.map((p,index)=>{const n=method('CIRCEXP.dll','?GetNode@CiComponent@@','pointer',['pointer','int'])(ciObject(ptr(c.id)),index);return n.toString();})}))}),
+  connectivity:()=>connectivityInfo(),
   editorInfo:()=>({handler:method('SCH_CAP.dll','?GetComponentHandler@@','pointer',[],'mscdecl')().toString(),extension:extension().toString(),objects:components().components.map(c=>({id:c.id,ref:c.ref,local_ref:c.local_ref,ci:ciObject(ptr(c.id)).toString()}))})};
 // Simulator transport sends control requests independently of a busy UI-thread analysis.
 rpc.exports.control=action=>{

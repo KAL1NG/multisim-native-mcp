@@ -27,3 +27,55 @@ def test_decode_stable_scanned_display_and_wrong_or_conflicting_selection():
         data,digits=fixture(wrong,conflict)
         result=decode_display(data,digits,'12',settling=.002,min_dwell=.001)
         assert result['passed']==passed
+
+
+def test_decode_display_with_digital_additional_plots():
+    # Digit 0 shows '4' ('0110011') from 0..0.01s, Digit 1 shows '7' ('1110000') from 0.01..0.02s
+    pat0 = SEGMENTS and next(k for k, v in SEGMENTS.items() if v == '4')
+    pat1 = next(k for k, v in SEGMENTS.items() if v == '7')
+    additional = []
+    for seg_idx in range(7):
+        b0, b1 = int(pat0[seg_idx]), int(pat1[seg_idx])
+        events = [[0.0, float(b0 == 1), float(b0 == 0)]]
+        if b1 != b0:
+            events.append([0.01, float(b1 == 1), float(b1 == 0)])
+        additional.append({
+            'plot': 'Digital',
+            'complex': False,
+            'digital': True,
+            'variables': [
+                {'index': 0, 'name': 'time', 'native_name': 'time', 'kind': 'time'},
+                {'index': 1, 'name': f'D(seg{seg_idx})', 'native_name': f'seg{seg_idx}', 'kind': 'voltage'},
+            ],
+            'rows': events,
+        })
+    for d_idx, rows in enumerate([
+        [[0.0, 1.0, 0.0], [0.01, 0.0, 1.0]],
+        [[0.0, 0.0, 1.0], [0.01, 1.0, 0.0]],
+    ]):
+        additional.append({
+            'plot': 'Digital',
+            'complex': False,
+            'digital': True,
+            'variables': [
+                {'index': 0, 'name': 'time', 'native_name': 'time', 'kind': 'time'},
+                {'index': 1, 'name': f'D(sel{d_idx})', 'native_name': f'sel{d_idx}', 'kind': 'voltage'},
+            ],
+            'rows': rows,
+        })
+    data = {
+        'complex': False,
+        'digital': False,
+        'variables': [
+            {'index': 0, 'name': 'time', 'native_name': 'time', 'kind': 'time'},
+            {'index': 1, 'name': 'V(vcc)', 'native_name': 'vcc', 'kind': 'voltage'},
+        ],
+        'rows': [[0.0, 5.0], [0.02, 5.0]],
+        'additional_plots': additional,
+    }
+    digits = [
+        {'segments': [f'D(seg{i})' for i in range(7)], 'select': 'D(sel0)'},
+        {'segments': [f'D(seg{i})' for i in range(7)], 'select': 'D(sel1)'},
+    ]
+    decoded = decode_display(data, digits, expected='47', settling=0.0005, min_dwell=0.002)
+    assert decoded['passed'] and decoded['decoded'] == '47'

@@ -116,3 +116,94 @@ def test_default_workflow_save_targets_current_copy_not_original(tmp_path):
     result=manager.start({'steps':[{'id':'save','kind':'save'}]})
     assert result['status']=='complete',result
     assert calls==['current']
+
+
+def test_create_cleans_up_on_failure_and_save_source_preserves_error(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    host = EditorService()
+    closed = []
+    host.close = lambda: closed.append(True) or {'closed': True}
+    host.open_circuit = lambda path: (_ for _ in ()).throw(RuntimeError('startup boom'))
+    target = tmp_path / 'orphan.ms14'
+    with pytest.raises(RuntimeError, match='startup boom'):
+        host.create('Broken', output_path=str(target))
+    assert not target.exists() and closed
+
+    # _save_source must not mask NativeSaveError when setProjectPath fails during cleanup
+    from multisim_native_mcp.service import NativeSaveError
+    host2 = EditorService()
+    src = tmp_path / 'src.ms14'
+    src.write_bytes(b'original-bytes')
+    host2.source = host2.working = src
+    host2.source_hash = sha256(src)
+    host2.call = lambda op, args=None: (
+        {'projectPath': str(src)} if op == 'inspect' else (_ for _ in ()).throw(RuntimeError('frida transport dead'))
+    )
+    host2.save_copy = lambda *a, **kw: (_ for _ in ()).throw(
+        NativeSaveError('Saved circuit differs', {'differences': [{'path': 'x'}]})
+    )
+    with pytest.raises(NativeSaveError, match='Saved circuit differs'):
+        host2._save_source()
+
+    # save_copy must reject relative paths even when relative path resolves to self.source!
+    host3 = EditorService()
+    rel_src = tmp_path / 'rel.ms14'
+    rel_src.write_bytes(b'data')
+    host3.source = host3.working = rel_src.resolve()
+    host3.source_hash = sha256(rel_src)
+    with pytest.raises(ValueError, match='absolute'):
+        host3.save_copy('rel.ms14')
+
+
+def test_restore_preserves_working_hash_and_session_dir_and_finish_guards_unsaved_attach(tmp_path, monkeypatch):
+    host = EditorService()
+    orig_session = tmp_path / 'orig_session'
+    orig_session.mkdir()
+    new_session = tmp_path / 'temp_session'
+    new_session.mkdir()
+    src = tmp_path / 's.ms14'
+    wrk = tmp_path / 'w.ms14'
+    src.write_bytes(b'src')
+    wrk.write_bytes(b'wrk')
+    host.owned = True
+    host.isolated = True
+    host.source, host.source_hash = src, 'src_hash'
+    host.working, host.working_hash = wrk, 'wrk_hash'
+    host.session_dir = orig_session
+    host.undo_stack = [{'path': 'u1'}]
+    attempts = []
+
+    def call(op, args=None):
+        assert op == 'restoreSnapshot'
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError('RPC lost')
+        return {'restored': True}
+
+    def fake_open(self, path):
+        self.session_dir = new_session
+        self.source = self.working = Path(path)
+        self.working_hash = 'ckpt_hash'
+
+    monkeypatch.setattr(NativeHost, 'open_circuit', fake_open)
+    host.call = call
+    host.close = lambda: {'closed': True}
+    res = host.restore({'path': str(tmp_path / 'ckpt.ms14')})
+    assert res['host_restarted'] is True
+    assert host.working == wrk and host.working_hash == 'wrk_hash'
+    assert host.session_dir == orig_session and not new_session.exists()
+    assert host.isolated is True and host.undo_stack == [{'path': 'u1'}]
+
+    # Attached unsaved circuit finish(save_changes=True) raises actionable ValueError without closing
+    attached = EditorService()
+    attached.agent = True
+    attached.owned = False
+    attached.isolated = False
+    attached.source = None
+    attached.call = lambda op, args=None: {'modified': True}
+    with pytest.raises(ValueError, match='never been saved to disk'):
+        attached.finish(save_changes=True)
+
+    # Dynamic install_dir() picks up MULTISIM_NATIVE_INSTALL env var
+    monkeypatch.setenv('MULTISIM_NATIVE_INSTALL', str(tmp_path / 'CustomNI'))
+    assert bridge.install_dir() == Path(tmp_path / 'CustomNI')

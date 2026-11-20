@@ -12,14 +12,14 @@ import time
 import uuid
 
 from .contracts import normalize_criteria
-from .jobs import ExperimentStore
+from .jobs import ExperimentStore, process_alive
 from .layout import check_layout
 from .measurements import measure
 from .paths import DATA_DIR
 from .verification import decode_display, verify
 from .waveforms import parse_raw
 from .workflow_contracts import ComponentRequest, WorkflowPlan
-from .workflow_values import resolve
+from .workflow_values import reference_roots, resolve
 from .identity import identity_changes
 
 
@@ -27,24 +27,6 @@ class NeedsInput(RuntimeError):
     def __init__(self, message, result=None):
         super().__init__(message)
         self.result = result
-
-
-def process_alive(pid):
-    if not isinstance(pid,int) or pid<=0:return False
-    if pid==os.getpid():return True
-    if os.name!='nt':return False
-    import ctypes
-    from ctypes import wintypes
-    kernel=ctypes.WinDLL('kernel32',use_last_error=True)
-    kernel.OpenProcess.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.DWORD];kernel.OpenProcess.restype=wintypes.HANDLE
-    kernel.GetExitCodeProcess.argtypes=[wintypes.HANDLE,ctypes.POINTER(wintypes.DWORD)]
-    kernel.CloseHandle.argtypes=[wintypes.HANDLE]
-    handle=kernel.OpenProcess(0x1000,False,pid)
-    if not handle:return False
-    try:
-        code=wintypes.DWORD()
-        return bool(kernel.GetExitCodeProcess(handle,ctypes.byref(code))) and code.value==259
-    finally:kernel.CloseHandle(handle)
 
 
 def digest(value):
@@ -204,7 +186,7 @@ class WorkflowManager:
                     self.host.call('wiringOptions',{'connect_touching':False})
                     for i,r in enumerate(missing):
                         if self.active and self.cancel_event.is_set():raise InterruptedError('Workflow cancelled during component preparation')
-                        search=self.host.call('librarySearch',{'query':r['name'],'family':r['family'],'group':r['group'],'limit':None})
+                        search=self.host.call('librarySearch',{'query':r['name'],'family':r['family'],'group':r['group'],'manufacturer':r['manufacturer'],'limit':None})
                         candidates=[c for c in search['results'] if c.get('Component_Name','').casefold()==r['name'].casefold()]
                         if r['manufacturer']:candidates=[c for c in candidates if c.get('Manufacturer_Name','').casefold()==r['manufacturer'].casefold()]
                         if len(candidates)!=1:
@@ -293,6 +275,7 @@ class WorkflowManager:
                     self._save_record(record)
                 record['status']='complete'
         except InterruptedError as error:
+            record.pop('failure',None)
             record.update(status='cancelled',error=str(error))
         except Exception as error:
             record.update(status='needs_input' if isinstance(error,NeedsInput) else 'failed',error=str(error))
@@ -304,7 +287,9 @@ class WorkflowManager:
                 except Exception as diagnostic:record['diagnostic_error']=str(diagnostic)
         finally:
             if budget:budget.cancel()
-            if self.cancel_event.is_set():record.update(status='cancelled',error=record.get('cancel_reason','Workflow cancelled'))
+            if self.cancel_event.is_set():
+                record.pop('failure',None)
+                record.update(status='cancelled',error=record.get('cancel_reason','Workflow cancelled'))
             record['stats']['native_calls']=record['stats'].get('native_calls',0)+getattr(self.host,'native_call_count',0)-calls
             record['stats']['native_seconds']=round(record['stats'].get('native_seconds',0)+getattr(self.host,'native_call_seconds',0.)-seconds,4)
             record['stats']['elapsed_seconds']=round(record['stats'].get('elapsed_seconds',0)+time.monotonic()-started,4)
@@ -315,7 +300,7 @@ class WorkflowManager:
                 with self.guard:self.active=None;self.finished.set()
 
     def _preflight_edits(self,ops,bindings):
-        requests=[];schemas={};issues=[]
+        requests=[];schemas={};issues=[];intra_binds=set()
         for op in ops:
             if op['operation']=='place':
                 a=op.get('arguments',{});r={k:a.get(k,'') for k in ('name','family','group','manufacturer')}
@@ -330,43 +315,78 @@ class WorkflowManager:
                 if op.get('bind'):schemas[op['bind']]=schema
                 if a.get('anchor')=='pin' and a.get('pin') not in {p['name'] for p in schema['pins']}:
                     issues.append({'operation':op.get('bind'),'error':'Unknown placement anchor pin','available':schema['pins']})
+                params_list=a.get('parameters')
+                if params_list is not None and (not isinstance(params_list,list) or any(not isinstance(p,dict) for p in params_list)):
+                    issues.append({'operation':op.get('bind') or a.get('ref'),'error':'parameters must be a list of parameter dicts'})
+                    params_list=[]
+                else:params_list=params_list or []
                 if 'value' in a or 'expression' in a:
                     slots=[p for p in schema['parameters'] if p.get('role')=='value']
                     if len(slots)!=1:issues.append({'operation':op.get('bind'),'error':'Primary value slot is ambiguous; provide indexed parameters','available':schema['parameters']})
+                    elif 'value' in a and 'expression' in a:
+                        issues.append({'operation':op.get('bind'),'error':'Provide value or expression, not both'})
                     else:
-                        if 'value' in a and 'expression' in a:
-                            issues.append({'operation':op.get('bind'),'error':'Provide value or expression, not both'})
-                        value=a.pop('expression') if 'expression' in a else a.pop('value');slot=slots[0]['index']
-                        if any(p.get('index')==slot for p in a.get('parameters',[])):issues.append({'operation':op.get('bind'),'error':'Primary value supplied twice'})
-                        a.setdefault('parameters',[]).append({'index':slot,'expression' if isinstance(value,str) else 'value':value})
+                        slot=slots[0]['index']
+                        if any(p.get('index')==slot for p in params_list):issues.append({'operation':op.get('bind'),'error':'Primary value supplied twice'})
+                        raw=a['expression'] if 'expression' in a else a['value']
+                        if not isinstance(raw,dict):
+                            if isinstance(raw,bool) or not isinstance(raw,(str,int,float)):
+                                issues.append({'operation':op.get('bind'),'error':'Invalid placement value'})
+                            else:
+                                value=a.pop('expression') if 'expression' in a else a.pop('value')
+                                a.setdefault('parameters',[]).append({'index':slot,'expression' if isinstance(value,str) else 'value':value})
+                                params_list=a['parameters']
+                if 'params' in a and a['params'] is not None:
+                    if not isinstance(a['params'],dict):
+                        issues.append({'operation':op.get('bind') or a.get('ref'),'error':'params must be a mapping of parameter names'})
+                    else:
+                        named={p['name']:p for p in schema['parameters'] if p.get('name')}
+                        for pname in a['params']:
+                            if pname not in named:
+                                issues.append({'operation':op.get('bind') or a.get('ref'),'parameter':pname,'error':'Unknown named parameter','available':schema['parameters']})
+                            elif any(p.get('index')==named[pname]['index'] for p in params_list):
+                                issues.append({'operation':op.get('bind') or a.get('ref'),'parameter':pname,'error':'Parameter supplied twice'})
                 indexes={p['index'] for p in schema['parameters']}
-                for p in a.get('parameters',[]):
+                for p in params_list:
                     if p.get('index') not in indexes:issues.append({'operation':op.get('bind') or a.get('ref'),'error':'Unknown parameter slot','available':schema['parameters']})
             if op['operation']=='setParameter' and 'index' not in a:
-                target=a.get('ref');alias=target.get('$ref','').split('.')[0] if isinstance(target,dict) else None
-                if alias in schemas:parameters=schemas[alias]['parameters']
-                else:parameters=self.host.call('parameters',{'ref':resolve(target,bindings)})['parameters']
-                slots=[p for p in parameters if p.get('role')==a.get('role','value') and ('name' not in a or p.get('name')==a['name'])]
-                if len(slots)!=1:issues.append({'operation':op,'error':'Parameter selector must match one slot','available':parameters})
-                else:a['index']=slots[0]['index'];a.pop('role',None);a.pop('name',None)
+                target=a.get('ref');alias=target.get('$ref','').split('.')[0] if isinstance(target,dict) and isinstance(target.get('$ref'),str) else None
+                if alias in schemas:
+                    parameters=schemas[alias]['parameters']
+                elif reference_roots(target)&intra_binds:
+                    if 'name' not in a and 'role' not in a:a['role']='value'
+                    parameters=None
+                else:
+                    parameters=self.host.call('parameters',{'ref':resolve(target,bindings)})['parameters']
+                if parameters is not None:
+                    role=a.get('role',None if 'name' in a else 'value')
+                    slots=[p for p in parameters if ('name' not in a or p.get('name')==a['name']) and (role is None or p.get('role')==role)]
+                    if len(slots)!=1:issues.append({'operation':op,'error':'Parameter selector must match one slot','available':parameters})
+                    else:a['index']=slots[0]['index'];a.pop('role',None);a.pop('name',None)
             for end in ('source','target'):
                 e=a.get(end,{})
                 if not isinstance(e,dict):continue
-                ref=e.get('ref');alias=ref.get('$ref','').split('.')[0] if isinstance(ref,dict) else None
+                ref=e.get('ref');alias=ref.get('$ref','').split('.')[0] if isinstance(ref,dict) and isinstance(ref.get('$ref'),str) else None
                 if alias in schemas and isinstance(e.get('pin'),str) and e['pin'] not in {p['name'] for p in schemas[alias]['pins']}:
                     issues.append({'endpoint':e,'error':'Unknown pin','available':schemas[alias]['pins']})
+            if op.get('bind'):intra_binds.add(op['bind'])
         if issues:raise NeedsInput('Edit preflight failed',{'issues':issues})
 
     def _signal(self,value):
         if isinstance(value,str):return value
         if not isinstance(value,dict):raise ValueError('Signal must be a vector name or a component/pin selector')
-        if set(value)=={'ref','pin'}:return self.host.call('signalForPin',value)['signal']
+        if 'pin' in value and set(value)<={'ref','component_ref','pin'} and ('ref' in value or 'component_ref' in value):
+            if 'ref' in value and 'component_ref' in value and value['ref']!=value['component_ref']:
+                raise ValueError('Conflicting component_ref and ref; provide one value for this selector')
+            ref=value['ref'] if 'ref' in value else value['component_ref']
+            return self.host.call('signalForPin',{'ref':ref,'pin':value['pin']})['signal']
         if set(value)=={'current'}:
+            if not self.cache:raise NeedsInput('Circuit state is unavailable; open a native session before resolving current selectors')
             target=value['current'];cs=self.cache['components']
             hits=[c for c in cs if target in (c['id'],c['ref'])]
             if len(hits)!=1:raise NeedsInput('Current selector must identify one component')
             return 'I('+hits[0]['ref']+')'
-        raise ValueError('Signal selector requires {ref,pin} or {current}')
+        raise ValueError('Signal selector requires {ref,pin}, {component_ref,pin}, or {current}')
 
     def _measure(self,raw_path,measurements,criteria):
         requests=copy.deepcopy(measurements)
@@ -391,8 +411,16 @@ class WorkflowManager:
             self.cache=None;self.catalog={};self._capture(rebind=False);return {**result,'state':self.cache}
         if kind=='prepare':return self.prepare(a['components'])
         if kind=='select':
+            if not self.cache:raise NeedsInput('Circuit state is unavailable; open a native session before selecting components')
             selected={};issues=[]
-            for name,selector in a['components'].items():
+            for name,raw_selector in a['components'].items():
+                selector=dict(raw_selector)
+                if 'component_ref' in selector:
+                    alias=selector.pop('component_ref')
+                    if alias is not None:
+                        if selector.get('ref') is not None and selector['ref']!=alias:
+                            raise ValueError('Conflicting component_ref and ref; provide one value for this selector')
+                        selector['ref']=alias
                 hits=[]
                 for c in self.cache['components']:
                     if any(c.get(k)!=selector[k] for k in ('ref','local_ref','id') if k in selector):continue
@@ -404,6 +432,26 @@ class WorkflowManager:
                 else:selected[name]=hits[0]
             if issues:raise NeedsInput('Component selection requires unique matches',{'issues':issues})
             return {'components':selected}
+        if kind=='select_sheet':
+            raw_sheets=self.host.call('sheets')
+            sheets=raw_sheets['sheets'] if isinstance(raw_sheets,dict) and 'sheets' in raw_sheets else raw_sheets
+            if a.get('index') is not None:
+                if isinstance(a['index'],bool) or not isinstance(a['index'],int) or a['index']<0:
+                    raise ValueError('Sheet index must be a nonnegative integer')
+                matches=[s for s in sheets if s.get('index')==a['index']]
+                if len(matches)!=1:raise NeedsInput(f"Sheet index {a['index']} was not found",{'sheets':sheets})
+            elif a.get('sheet_id') is not None:
+                matches=[s for s in sheets if s.get('id')==a['sheet_id']]
+                if len(matches)!=1:raise NeedsInput(f"Sheet id {a['sheet_id']!r} was not found",{'sheets':sheets})
+            elif a.get('title') is not None:
+                matches=[s for s in sheets if s.get('title')==a['title']]
+                if len(matches)!=1:
+                    raise NeedsInput(f"Sheet title {a['title']!r} must match exactly one sheet",{'sheets':sheets,'candidates':matches})
+            else:
+                raise ValueError('SelectSheetStage requires index, title, or sheet_id')
+            result=self.host.call('selectSheet',{'index':matches[0]['index']})
+            self._capture(rebind=False)
+            return result
         if kind=='wiring':
             persist=a.pop('persist',False)
             result=self.host.configure_wiring(**a,persist=True) if persist else self.host.call('wiringOptions',a)
@@ -464,25 +512,30 @@ class WorkflowManager:
                     if self.host.interactive_status()['state_name']=='paused':self.host.control_interactive('resume',15)
                     selected=capture.get('active_component')
                     if selected:
+                        if not self.cache:raise NeedsInput('Circuit state is unavailable; open a native session before resolving capture selectors')
                         hits=[c for c in self.cache['components'] if selected in (c['ref'],c['id'])]
                         if len(hits)!=1:raise NeedsInput('Capture selector must identify one display')
                         selected=hits[0]['ref']
+                    render_opts={k:capture[k] for k in ('dpi','scale','region','fit_content','padding','show_frame','show_grid') if k in capture}
                     expected=capture.get('expected_digit')
                     if expected is None:
                         frame=self.host.export_interactive_image(capture['output_path'],overwrite=a.get('overwrite',False),
-                            active_component=selected,wait_timeout=capture.get('wait_timeout'),cancel=self.cancel_event)
+                            active_component=selected,wait_timeout=capture.get('wait_timeout'),cancel=self.cancel_event,**render_opts)
                     else:
-                        output=Path(capture['output_path']);temporary=output.with_name('capture-'+uuid.uuid4().hex+output.suffix)
+                        output=Path(capture['output_path'])
+                        if output.exists() and not a.get('overwrite',False):raise FileExistsError('Output already exists')
+                        temporary=output.with_name('capture-'+uuid.uuid4().hex+output.suffix)
                         timeout=capture.get('wait_timeout');deadline=None if timeout is None else time.monotonic()+timeout
                         try:
                             while True:
                                 if self.cancel_event.is_set():raise InterruptedError('Workflow cancelled')
                                 frame=self.host.export_interactive_image(str(temporary),overwrite=True,active_component=selected,
-                                    wait_timeout=None if deadline is None else max(0,deadline-time.monotonic()),cancel=self.cancel_event)
-                                if any(d['decoded']==expected and (not selected or d['ref']==selected) for d in frame['display_states']):break
+                                    wait_timeout=None if deadline is None else max(0,deadline-time.monotonic()),cancel=self.cancel_event,**render_opts)
+                                if any(d.get('decoded')==expected and (not selected or d['ref']==selected) for d in frame['display_states']):break
                                 if self.cancel_event.is_set():raise InterruptedError('Workflow cancelled')
                                 if deadline is not None and time.monotonic()>=deadline:raise NeedsInput('Captured display does not match expected digit',frame)
                                 self.cancel_event.wait(.03)
+                            if output.exists() and not a.get('overwrite',False):raise FileExistsError('Output already exists')
                             temporary.replace(output);frame['path']=str(output)
                         finally:temporary.unlink(missing_ok=True)
                     frames.append(frame)
@@ -521,7 +574,7 @@ class WorkflowManager:
             elif stage['kind']=='interactive':outputs[stage['id']]={'passed':value['passed'],
                 **({'configuration':value['configuration']} if 'configuration' in value else {}),
                 'frames':[{k:f[k] for k in ('path','display_states','capture_mode') if k in f} for f in value['frames']]}
-            elif stage['kind'] in ('layout','verify','decode','prepare','simulation_settings','sheet_display'):outputs[stage['id']]=value
+            elif stage['kind'] in ('layout','verify','decode','prepare','simulation_settings','sheet_display','select_sheet'):outputs[stage['id']]=value
         result['results']=outputs
         if self.record and self.record['id']==identifier and not live:
             try:self.store.write(self.record)
@@ -560,7 +613,7 @@ class WorkflowManager:
 
     @staticmethod
     def _wait_value(value):
-        if not math.isfinite(value) or value<0:raise ValueError('wait_timeout must be a finite nonnegative number')
+        if isinstance(value,bool) or not math.isfinite(value) or value<0:raise ValueError('wait_timeout must be a finite nonnegative number')
 
     def _request_cancel(self,identifier,reason):
         with self.guard:

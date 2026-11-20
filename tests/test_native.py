@@ -14,7 +14,7 @@ pytestmark=pytest.mark.native
 def test_rotated_and_copied_symbols_stay_aligned_with_wire_graphics(tmp_path):
     host=EditorService()
     try:
-        host.create('Rotated divider')
+        host.create('Rotated divider',str(tmp_path/'rotated-divider.ms14'))
         for name,ref,x,y in [('DC_POWER','V1',108,108),('RESISTOR_VIRTUAL','R1',306,108),('RESISTOR_VIRTUAL','R2',504,108),('GROUND','0',108,306)]:
             host.edit('place',{'name':name,'ref':ref,'x':x,'y':y})
         for ref,value in [('V1',12),('R1',1000),('R2',1000)]:host.edit('setParameter',{'ref':ref,'index':1,'value':value})
@@ -58,7 +58,7 @@ def test_native_edit_save_reload_and_analog_analysis(tmp_path,different_referenc
     try:
         status=host.runtime_status()
         assert status['available'] and not status['compatible']
-        host.create('Voltage divider')
+        host.create('Voltage divider',str(tmp_path/'voltage-divider.ms14'))
         assert not host.call('components')['components']
         assert not host.call('wires')['wires']
         for name,ref,x,y in [('DC_POWER','V1',108,108),('RESISTOR_VIRTUAL','R1',306,108),('RESISTOR_VIRTUAL','R2',504,108),('GROUND','0',108,306)]:
@@ -101,7 +101,7 @@ def test_native_edit_save_reload_and_analog_analysis(tmp_path,different_referenc
 def test_attach_preserves_existing_process(tmp_path,different_reference):
     owner=EditorService();client=EditorService()
     try:
-        owner.create('Attach test')
+        owner.create('Attach test',str(tmp_path/'attach-test.ms14'))
         owner.edit('place',{'name':'RESISTOR_VIRTUAL','ref':'R1','x':306,'y':108})
         pid=owner.process.pid
         owner.agent.exports_sync.close();owner.agent.unload();owner.session.detach()

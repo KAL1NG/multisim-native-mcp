@@ -31,3 +31,15 @@ def test_background_cancel_and_persistent_result(tmp_path,monkeypatch):
     manager.shutdown()
     persisted=ExperimentManager(None,tmp_path/'records').store.read(job['id'])
     assert persisted['status']=='cancelled' and persisted['result']['restored']
+
+
+def test_experiment_manager_preserves_live_owner_pid_and_interrupts_dead_pid(tmp_path):
+    import os
+    store = ExperimentStore(tmp_path)
+    live_id = '1' * 32
+    dead_id = '2' * 32
+    store.write({'id': live_id, 'status': 'running', 'created': 1, 'owner_pid': os.getpid()})
+    store.write({'id': dead_id, 'status': 'running', 'created': 1, 'owner_pid': 99999999})
+    observer = ExperimentManager(None, tmp_path)
+    assert observer.store.read(live_id)['status'] == 'running'
+    assert observer.store.read(dead_id)['status'] == 'interrupted'

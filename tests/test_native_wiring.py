@@ -21,7 +21,7 @@ def attached(host):
 def test_native_autowire_moves_touching_and_saved_branches(tmp_path):
     h=EditorService()
     try:
-        h.create('Native autowiring')
+        h.create('Native autowiring',str(tmp_path/'autowiring.ms14'))
         original=h.call('wiringOptions')
         h.call('wiringOptions',{'autowire_on_connection':True,'autowire_on_move':True,'connect_touching':False,'move_connection_limit':12})
         placed=h.batch([{'operation':'place','arguments':{'name':'RESISTOR_VIRTUAL','family':'RESISTOR','group':'Basic',
@@ -73,7 +73,7 @@ def test_native_autowire_moves_touching_and_saved_branches(tmp_path):
 def test_disabled_autowiring_and_off_page_routes_preserve_connections(tmp_path):
     h=EditorService()
     try:
-        h.create('Wiring settings')
+        h.create('Wiring settings',str(tmp_path/'wiring-settings.ms14'))
         original=h.call('wiringOptions')
         h.call('wiringOptions',{'autowire_on_connection':False,'autowire_on_move':False,'connect_touching':False})
         for ref,x in [('R1',180),('R2',720)]:
@@ -91,7 +91,7 @@ def test_disabled_autowiring_and_off_page_routes_preserve_connections(tmp_path):
         assert link['routing_engine']=='orthogonal'
         assert len(h.call('wires')['wires'])==2
         attached(h)
-        h.close();h.create('Restored wiring settings')
+        h.close();h.create('Restored wiring settings',str(tmp_path/'restored-wiring-settings.ms14'))
         assert h.call('wiringOptions')==original
     finally:h.close()
 
@@ -99,7 +99,7 @@ def test_disabled_autowiring_and_off_page_routes_preserve_connections(tmp_path):
 def test_touching_crossing_of_different_nets_rolls_back(tmp_path):
     h=EditorService()
     try:
-        h.create('Crossing contacts')
+        h.create('Crossing contacts',str(tmp_path/'crossing-contacts.ms14'))
         h.call('wiringOptions',{'connect_touching':False,'autowire_on_move':False})
         for ref,x,y in [('R1',108,180),('R2',792,180),('R3',450,90),('R4',450,630),('R5',450,450)]:
             h.edit('place',{'name':'RESISTOR_VIRTUAL','family':'RESISTOR','group':'Basic','ref':ref,'x':x,'y':y,'anchor':'pin','pin':'1'})

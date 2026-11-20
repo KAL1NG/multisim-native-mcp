@@ -66,3 +66,117 @@ def test_netlist_failure_is_also_persisted(tmp_path):
 ])
 def test_invalid_ac_sweeps(options):
     with pytest.raises(ValueError):EditorService().run_analysis('ac',**options)
+
+
+def test_run_analysis_forwards_invalidated_handles_and_supports_dc_sweep(tmp_path):
+    host = EditorService()
+    host.working = tmp_path / 'working.ms14'
+    host.netlist = lambda: {
+        'failed': False,
+        'handles_invalidated': True,
+        'handle_generation': 7,
+        'id_map': {'old_c1': 'new_c1'},
+        'unresolved_ids': ['old_txt'],
+        'state': {'components': [{'id': 'new_c1', 'ref': 'V1'}], 'wires': []},
+    }
+    captured = {}
+
+    def call(op, args=None):
+        captured[op] = args
+        if op == 'simulate':
+            return {'failed': False, 'command': 'dc vV1 0 5 2.5'}
+        if op == 'simulationExport':
+            from pathlib import Path
+            Path(args['path']).write_text(
+                'Title: DC Divider\n'
+                'Plotname: DC Transfer Characteristic\n'
+                'Flags: real\n'
+                'No. Variables: 2\n'
+                'No. Points: 3\n'
+                'Variables:\n'
+                '0 v1 voltage vv1 voltage (v)\n'
+                '1 n2 voltage V(out)\n'
+                'Values:\n'
+                '0 0\n0\n'
+                '1 2.5\n1.25\n'
+                '2 5\n2.5\n',
+                encoding='utf-8',
+            )
+            return {'result': 0}
+        raise AssertionError(op)
+
+    host.call = call
+    res = host.run_dc_sweep('V1', 0.0, 5.0, 2.5)
+    assert captured['simulate']['analysis'] == 'dc'
+    assert captured['simulate']['dc_source'] == 'V1'
+    assert res['handles_invalidated'] is True
+    assert res['handle_generation'] == 7
+    assert res['id_map'] == {'old_c1': 'new_c1'}
+    assert res['unresolved_ids'] == ['old_txt']
+    assert res['state']['components'][0]['id'] == 'new_c1'
+    assert res['points'] == 3
+
+
+def test_netlist_topology_refresh_maps_identities_across_all_sheets(tmp_path):
+    host = EditorService()
+    host.topology_dirty = True
+    host.handle_generation = 3
+    before_states = [
+        {
+            'sheet_index': 0,
+            'components': [{'id': 's0_old', 'ref': 'R1', 'local_ref': 'R1', 'transform': [1, 0, 0, 1, 90, 90], 'pins': []}],
+            'wires': [],
+        },
+        {
+            'sheet_index': 1,
+            'components': [{'id': 's1_old', 'ref': 'R2', 'local_ref': 'R2', 'transform': [1, 0, 0, 1, 180, 90], 'pins': []}],
+            'wires': [],
+        },
+    ]
+    after_states = [
+        {
+            'sheet_index': 0,
+            'components': [{'id': 's0_new', 'ref': 'R1', 'local_ref': 'R1', 'transform': [1, 0, 0, 1, 90, 90], 'pins': []}],
+            'wires': [],
+        },
+        {
+            'sheet_index': 1,
+            'components': [{'id': 's1_new', 'ref': 'R2', 'local_ref': 'R2', 'transform': [1, 0, 0, 1, 180, 90], 'pins': []}],
+            'wires': [],
+        },
+    ]
+    state_calls = []
+
+    def call(op, args=None):
+        if op == 'simulationInfo':
+            return {'state': 0}
+        if op == 'projectCircuitState':
+            state_calls.append(1)
+            return {'states': before_states if len(state_calls) == 1 else after_states}
+        if op == 'netlist':
+            return {'failed': False, 'content': '* clean netlist\n'}
+        raise AssertionError(op)
+
+    host.call = call
+    host.checkpoint = lambda: {'path': str(tmp_path / 'ckpt.ms14'), 'sheet_index': 1}
+    host.restore = lambda ckpt: setattr(host, 'topology_dirty', False) or setattr(host, 'handle_generation', 4) or {}
+    out = host.netlist()
+    assert out['handles_invalidated'] is True
+    assert out['id_map'] == {'s0_old': 's0_new', 's1_old': 's1_new'}
+    assert out['state']['sheet_index'] == 1
+
+
+def test_restore_restarts_only_owned_processes_with_numeric_context():
+    host = EditorService()
+    host.numeric_session_used = True
+    calls = []
+    checkpoint = {'path': 'checkpoint.ms14'}
+    host.call = lambda operation, args: calls.append((operation, args)) or {}
+    host._restart_from_checkpoint = lambda args: calls.append(('restart', args)) or {'host_restarted': True}
+
+    host.owned = True
+    assert host.restore(checkpoint)['host_restarted']
+    host.owned = False
+    host.restore(checkpoint)
+
+    assert calls == [('restart', checkpoint), ('restoreSnapshot', checkpoint)]

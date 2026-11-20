@@ -49,13 +49,13 @@ Pins and wire endpoints include `graphic_position` and `graphics_aligned` alongs
 
 ## Components and parameters / 元件与参数
 
-`native_search_library` returns `Family_Name` and `Group_Name`. Filter by exact `family` and `group` names. For an adjustable resistor, search `RESISTOR_VIRTUAL` in family `RESISTOR`. Placement returns the actual model, native reference prefix and indexed parameters. Primary parameters include a name, unit and `role: value`.
+`native_search_library` returns `Family_Name`, `Group_Name`, `Manufacturer_Name`, `Model_Name` and `Simulatable`. Filter by exact `family`, `group` and `manufacturer` names, or set `simulatable_only: true` to exclude non-simulatable models. Exact name matches are ranked first. For an adjustable resistor, search `RESISTOR_VIRTUAL` in family `RESISTOR`. Placement returns the actual model, native reference prefix and indexed parameters. Primary parameters include a name, unit and `role: value`.
 
-元件库搜索返回真实族名与组名，可通过 `family` 和 `group` 精确筛选。可调电阻可选择 `RESISTOR` 族的 `RESISTOR_VIRTUAL`。放置结果提供实际模型、默认参考号前缀和参数索引；主参数包含名称、单位及 `role: value`。
+元件库搜索返回真实族名、组名、厂商名、模型名和可仿真标记，可通过 `family`、`group`、`manufacturer` 精确筛选或开启 `simulatable_only`，精确匹配优先排序。可调电阻可选择 `RESISTOR` 族的 `RESISTOR_VIRTUAL`。放置结果提供实际模型、默认参考号前缀和参数索引；主参数包含名称、单位及 `role: value`。
 
-Set parameters during placement:
+Set parameters during placement with indexed `parameters`, primary `value`/`expression`, or named `params` (for example `{"frequency": "1k", "ac_magnitude": 1}`), and update existing parts with `native_set_parameter(component_ref, value=...)` or by parameter `name`/`role` without knowing the numeric index:
 
-放置时可直接设置参数：
+放置时可直接通过索引 `parameters`、主参数 `value`/`expression` 或命名参数字典 `params`（例如 `{"frequency": "1k", "ac_magnitude": 1}`）设置数值；修改已有元件时，也可直接省略 `index`，用 `value`/`expression` 修改唯一主参数或用 `name`/`role` 指定参数槽：
 
 ```json
 {
@@ -81,9 +81,9 @@ Batch edits are atomic by default: a failed operation rolls back that batch whil
 
 ## Saved sheet layout / 保存图纸布局
 
-Before saving a finished schematic, check that `content_bounds` lies inside `page.bounds` with a margin. Include symbols, labels, text and wire routes. Move the complete layout inside the page, or enlarge the real sheet through `native_edit_batch` with a `sheetSize` operation:
+Before saving a finished schematic, check that `content_bounds` lies inside `page.bounds` with a margin. Include symbols, labels, text and wire routes. Call `native_fit_sheet(margin, resize)` to shift negative or off-page contents inward by a grid-aligned offset and optionally enlarge the real sheet in one undoable edit, or resize explicitly through `native_edit_batch` with a `sheetSize` operation:
 
-保存完整原理图前，检查 `content_bounds` 是否位于 `page.bounds` 内并留有边距，检查范围包括元件、标签、文字与导线路径。可将完整电路移入图纸，或通过 `native_edit_batch` 的 `sheetSize` 操作增大真实图纸：
+保存完整原理图前，检查 `content_bounds` 是否位于 `page.bounds` 内并留有边距，检查范围包括元件、标签、文字与导线路径。可调用 `native_fit_sheet(margin, resize)` 在一次可撤销编辑中按网格对齐平移负坐标/越界内容并按需调整图纸尺寸，或通过 `native_edit_batch` 的 `sheetSize` 操作增大真实图纸：
 
 ```json
 {"operations":[{"operation":"sheetSize","arguments":{"width":1200,"height":900}}],"include_state":true}
@@ -113,7 +113,7 @@ Export defaults to a clean circuit image. Set `show_frame: true` to include the 
 
 Choose either `region` or `fit_content`. Export preserves electrical attachments and sheet dimensions; connector graphics are synchronized before rendering. There is no MCP pixel quota. Bitmap file format and available memory determine rendering capacity. Whole-page export reports off-page references without blocking the export.
 
-`region` 与 `fit_content` 二选一。导出前会同步连接图形，保留电气连接和图纸尺寸，最大图片为 3200 万像素。整页导出会返回页外元件引用；所有元件均在页外时会提示改用适配内容或区域导出。
+`region` 与 `fit_content` 二选一。导出前会同步连接图形，保留电气连接和图纸尺寸；MCP 不设像素上限，实际渲染能力取决于位图格式和可用内存。整页导出会返回页外元件引用；所有元件均在页外时会提示改用适配内容或区域导出。
 
 Move a reference or value label with `native_move_component_label(component_ref, x, y, kind)`, where `kind` is `reference` (default) or `value`. Coordinates specify the label's center. Read label text and bounds from `state.components[].labels`; the symbol and electrical pins remain at their existing positions. Parameter edits refresh native value text immediately, and rotation keeps labels upright and clear of the symbol body.
 
@@ -133,4 +133,4 @@ Add `persist:true` to `native_configure_wiring` to commit native application-wid
 
 Off-page wiring uses explicit orthogonal routes when the native router cannot route outside the sheet. Moving outside the sheet preserves attached wire geometry. The MCP does not reject these edits. Sheet dimensions must fit the native CUTRect work-area fields after unit conversion; these fields are signed 32-bit integers. Rotation accepts finite angles, including fractional degrees.
 
-Named wires save their native network name and visibility. Generated node text is reconstructed by Multisim and is verified separately from independent annotations. Deleting a generated net label clears that wire’s user name/display while preserving the wire. `native_list_projects` can attach the sole running Multisim process; `native_runtime_status` distinguishes running applications from the attached MCP session.
+Named wires save their native network name and visibility. Use `native_label_wire` to assign a nonempty name. Separate electrical nets require distinct names. Join nets with a wire, junction, power symbol or On-Page connector. Multisim reconstructs generated node text, and save verification checks it separately from independent annotations. Deleting a generated net label clears the user-assigned name and display while preserving the wire. Inspect sheet-wide electrical nets and SPICE vector names with `native_get_connectivity`, `native_get_circuit_state(include_nets: true)` or `native_resolve_signal(component_ref, pin)`. `native_list_projects` can attach the sole running Multisim process, and `native_runtime_status` reports running applications and the attached MCP session.

@@ -9,7 +9,7 @@ pytestmark=pytest.mark.native
 def test_native_scene_parameters_labels_and_high_resolution_export(tmp_path):
     h=EditorService()
     try:
-        h.create('Scene API divider')
+        h.create('Scene API divider',str(tmp_path/'scene-divider.ms14'))
         page=h.call('sheets')[0]
         assert (page['width'],page['height'])==(960,720)
         assert page['bounds']['right']==960 and page['units_per_inch']==96
@@ -55,7 +55,7 @@ def test_native_scene_parameters_labels_and_high_resolution_export(tmp_path):
 def test_off_page_routing_and_fitted_export(tmp_path):
     h=EditorService()
     try:
-        h.create('Off-page geometry')
+        h.create('Off-page geometry',str(tmp_path/'off-page-geometry.ms14'))
         # This fixture intentionally keeps content outside the sheet; native
         # automatic routing is tested separately with in-page endpoints.
         h.call('wiringOptions',{'autowire_on_connection':False,'connect_touching':False})

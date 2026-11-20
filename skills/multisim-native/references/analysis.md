@@ -7,8 +7,11 @@ For analysis plus acceptance, put measurements and criteria on a workflow `analy
 - `native_run_analysis(analysis: "op")` runs a DC operating point. For transient analysis use `analysis: "tran"`, `step` and `stop` in seconds. Time and sample counts have no MCP workload ceiling; use finite positive values with step no larger than stop.
 - `use_initial_conditions: true` selects transient UIC; choose it based on circuit startup requirements, not as an automatic response to every convergence failure.
 - `native_run_ac_sweep` takes `sweep: "lin" | "dec" | "oct"`, `points`, `start_hz` and `stop_hz`. `lin` uses a total point count; the others use points per decade or octave. Configure the source's AC magnitude first.
+- `native_run_dc_sweep(source, start, stop, step)` sweeps an independent voltage or current source (such as `V1`) across DC values and exports RAW/CSV artifacts.
+- `native_resolve_signal(component_ref, pin)` resolves a pin to its exact SPICE vector name (`V(...)`).
 - Results include `vectors`, `raw_path`, `csv_path`, `netlist_path` and `diagnostic_path`. Inspect actual source values and waveform metadata when results disagree with circuit expectations. Preserve raw numeric values; do not scale large currents to force a match.
 - `native_read_waveform` accepts `offset`, `limit` and `plot_index`. Appended digital-node plots contain transition records `[time, rising, falling]`, not ordinary voltage samples.
+- `native_plot_waveform` writes SVG or PNG based on `output_path`. Use `overlay: true` for same-unit traces on one axis, or `reference` for a dual-panel AC Bode plot (dB and degrees vs. frequency).
 - For longer multi-stage work, use a workflow and wait with `native_workflow_status(wait_timeout: 30)`. When controlling an individual analysis independently, use `native_start_analysis`, then `native_analysis_status`. `native_control_analysis` requests `pause`, `resume` or `stop`; verify the resulting state instead of treating the acknowledgment as completion.
 
 ## Measurement and acceptance schema
@@ -31,9 +34,11 @@ Pass the analysis's actual `raw_path` to `native_verify_waveform`:
 
 This example assumes a 12 V divider with two 1 kΩ resistors and a transient run covering the window. Replace `V(2)` with the actual output vector and respect the source-current sign convention. For an operating point, omit the time window.
 
-Measurements require `id`, `metric` and `signal`. Real metrics are `min`, `max`, `mean`, `rms`, `peak_to_peak`, `frequency` and `duty_cycle`. Optional fields include `start`, `stop` and crossing `threshold`; duty cycle is a fraction from 0 to 1. Mean and RMS use the actual adaptive time grid. `native_measure_waveform` computes measurements without acceptance criteria.
+Measurements require `id`, `metric` and `signal`. Real/time metrics are `min`, `max`, `mean`, `rms`, `peak_to_peak`, `frequency`, `duty_cycle`, `period`, `rise_time` (10%–90%), `fall_time` (90%–10%), `overshoot` (%) and `value_at` (requires `at`). Optional fields include `start`, `stop`, crossing `threshold`, and `plot_index` (which also supports digital-node event plots); duty cycle is a fraction from 0 to 1. Mean and RMS use the actual adaptive time grid. `native_measure_waveform` computes measurements without acceptance criteria.
 
-Criteria use the same `id` as measurements and specify `min` / `max`, or `target` with `absolute_tolerance` / `relative_tolerance`. The older criterion key `measurement` is also accepted. AC metrics `gain_db` and `phase_deg` also need `reference` and `frequency_hz`:
+`settling_time` measures seconds from the transient window start to the last entry into the settling band. Set `tolerance` as a fraction of the step size (default `0.02`) and optionally set `final_value`; the default target is the last sample. With the RAW-generating circuit open, both standalone measurement and verification accept `{"component_ref":"R2","pin":"1"}` for `signal` or `reference`. Vector names work offline.
+
+Criteria use the same `id` as measurements and specify `min` / `max`, or `target` with `absolute_tolerance` / `relative_tolerance`. The older criterion key `measurement` is also accepted. AC metrics `gain_db`, `phase_deg` and `magnitude` need `frequency_hz` (`gain_db`/`phase_deg` also need `reference`; `magnitude` accepts optional `reference`), while `bandwidth_3db` (-3 dB cutoff Hz) and `phase_margin` (unity-gain phase margin in degrees) require `reference`:
 
 ```json
 {"id":"gain","metric":"gain_db","signal":"V(2)","reference":"V(1)","frequency_hz":1000}
@@ -59,7 +64,7 @@ Use `native_run_parameter_sweep` for synchronous work or `native_start_experimen
 }
 ```
 
-Resolve the component's real value index before sweeping. Parameter and Cartesian trial counts have no MCP ceiling. Goals are `min`, `max` and `target`; `result.best` is the zero-based index of the best feasible trial. Original numeric values and expressions are restored after execution; applying the selected candidate is a separate edit.
+Resolve the component's real value index before sweeping, or supply `name` / `role` instead of `index` (`component_ref` is accepted as an alias for `ref`). Analysis supports `op`, `tran`, `ac` and `dc` (`dc_source`, `dc_start`, `dc_stop`, `dc_step`). Parameter and Cartesian trial counts have no MCP ceiling. Goals are `min`, `max` and `target` (using `id` or `measurement`); `result.best` is the zero-based index of the best feasible trial. Original numeric values and expressions are restored after execution; applying the selected candidate is a separate edit.
 
 While a background experiment is active, inspect it with `native_experiment_status` or `native_list_experiments`, or request cancellation with `native_cancel_experiment`. Wait for terminal status and parameter restoration before editing. Save the source circuit before running a job that must be retryable. To retry, save any desired current edits, close the active session, then call `native_retry_experiment`; it opens the saved source in a new copy and returns a new ID linked by `retry_of`.
 
@@ -69,7 +74,7 @@ While a background experiment is active, inspect it with `native_experiment_stat
 
 ## Interactive simulation
 
-`native_control_interactive` accepts `start`, `pause`, `resume`, `stop` and `wait_timeout` (any finite nonnegative duration). Use `transition_confirmed` to check actual completion. `simulation_time_s` is the native GUI's displayed simulation time; it may have display rounding. Read actual `SEVEN_SEG_COM_A` segments with `native_interactive_status(include_displays: true)`.
+`native_control_interactive` accepts `start`, `pause`, `resume`, `stop` and `wait_timeout` (any finite nonnegative duration). Use `transition_confirmed` to check actual completion. `simulation_time_s` comes from the native status bar and may be rounded. `native_interactive_status(include_displays: true)` reads seven-segment and `DCD_HEX` segments and decoded digits, LED `lit` and `state`, and `PROBE_DIG` logic `level` (`0`, `1`, or `null` when unconnected).
 
 `native_configure_interactive(time_step: 0.001, max_time_step: 0.001, real_time: true)` writes native document settings by default; use persist:false for temporary overrides. Document settings persist on normal save/close; subsequent `native_save_copy` preserves them for ordinary Multisim starts after reopening. Read document settings with `persist: true` and no values. To save immediately, add `save_to_source: true` to back up and replace it after independent native reopen verification. `saved_to_file: false` indicates that only the editable document was changed. Source conflicts stop replacement. `persist: true, reset: true` restores automatic steps and real-time pacing in the document; save it to retain the reset. Numeric analysis definitions and other solver options are preserved. Persistent changes clear temporary overrides so they cannot mask the document values.
 

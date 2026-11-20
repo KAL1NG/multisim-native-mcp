@@ -4,15 +4,25 @@ For complete circuit tasks, prefer staged workflows in [workflows.md](workflows.
 
 ## State and parameters
 
-Create directly in the task workspace with `native_create_circuit(output_path, title)` and edit existing sources with `native_open_circuit`. Both return an initial `state`. `native_list_projects` attaches a single running Multisim process when no session is attached; runtime status distinguishes `running` from `session_attached`. `native_get_circuit_state` omits parameter metadata by default; `include_parameters: true` returns current page bounds, sheet selection, component refs and pins, wire routes, labels, content bounds and indexed parameters.
+Create directly in the task workspace with `native_create_circuit(output_path, title)` and edit existing sources with `native_open_circuit`. Both return an initial `state`. `native_list_projects` attaches a single running Multisim process when no session is attached; runtime status distinguishes `running` from `session_attached`. `native_get_circuit_state` omits parameter metadata and net names by default; `include_parameters: true` adds indexed parameters, and `include_nets: true` attaches wire net names and pin SPICE signal names (`V(...)`). Use `native_get_connectivity()` for sheet-wide wire/pin net mappings and `native_resolve_signal(component_ref, pin)` to resolve one pin's SPICE vector name.
 
-For a component already present, call `native_get_parameters(component_ref)` and select its electrical-value descriptor by `role`, `name` and `unit`. Write either a numeric `value` or an `expression`, never both:
+`native_search_library` returns `Manufacturer_Name`, `Model_Name` and `Simulatable` alongside family/group categories, ranks exact name matches first, and supports `manufacturer` and `simulatable_only` filters.
+
+For a component already present, call `native_get_parameters(component_ref)` and select its electrical-value descriptor by `role`, `name` and `unit`. Common parts (including `RESISTOR_VIRTUAL`, `CAPACITOR_VIRTUAL`, `INDUCTOR_VIRTUAL`, `DC_POWER`, `DC_CURRENT`, `AC_POWER`, `AC_VOLTAGE`, `CLOCK_VOLTAGE`, `PULSE_VOLTAGE`, `OPAMP_3T_VIRTUAL`, `VDD`/`VCC`/`VSS`/`VEE` and `LED` parts) expose named descriptors, so `native_set_parameter` can omit `index` (defaulting to the unique `role: "value"` slot) or select by `name`/`role`, and `native_place_component` accepts `params` (for example `{"frequency": "1k", "ac_magnitude": 1}`). Write either a numeric `value` or an `expression`, never both:
 
 ```json
-{"component_ref":"R1","index":1,"value":1000}
+{"component_ref":"R1","value":1000}
 ```
 
-Here index 1 applies specifically to `RESISTOR_VIRTUAL`. Its index 0 is a model option, not resistance. Numeric values use the descriptor's unit; SPICE expressions such as `1k` can be supplied through `expression`.
+Or select a named slot explicitly:
+
+```json
+{"component_ref":"V1","name":"frequency","expression":"1k"}
+```
+
+When using `index` directly, index 1 applies specifically to `RESISTOR_VIRTUAL` (index 0 is a model option, not resistance). Numeric values use the descriptor's unit; SPICE expressions such as `1k` can be supplied through `expression`.
+
+`POTENTIOMETER_VIRTUAL` and `POTENTIOMETER_RATED` expose total `resistance` and `wiper_step` (percent per adjustment). The rated part also exposes `rated_power`. `Potentiometer1_5K` has a fixed 5 kΩ resistance and exposes `wiper_step`. Verify their electrical response with native interactive simulation. The standalone numeric SPICE path can retain these models' placeholder resistors because it does not apply their interactive control code.
 
 ## Placement transforms and displayed values
 
@@ -24,7 +34,7 @@ All placement entry points support `angle` (finite degrees), `mirror_axis` (`hor
 
 Primary values require one unambiguous value descriptor. Explicit strings such as `1u`, `10n`, `68k` and `1Meg` are preserved. Numeric primary placement values use compact SPICE engineering expressions (`1e-6` becomes `1u`, `10000` becomes `10k`); explicit indexed expressions override formatting. Indexed numeric primary placement parameters receive the same compact formatting. Other slots and later numeric `set_parameter` calls retain their existing behavior. Native numeric caches can remain null until expression evaluation; check generated SPICE or simulation for electrical values.
 
-Omit `reference` / `ref` for repeated power symbols. Duplicate GROUND/VDD/VSS/VCC/VEE/GND default network-style references use native-assigned identities and return `reference_auto_assigned` with requested/actual references and a unique component ID. Global supplies can retain shared refs after reopening; use returned IDs or workflow bindings. Custom duplicate references still fail atomically.
+Omit `reference` / `ref` for repeated power symbols. Duplicate GROUND/VDD/VSS/VCC/VEE/GND/DGND/AGND default network-style references use native-assigned identities and return `reference_auto_assigned` with requested/actual references and a unique component ID. Global supplies can retain shared refs after reopening; use returned IDs or workflow bindings. Custom duplicate references still fail atomically.
 
 ## Batch edits
 
@@ -49,8 +59,8 @@ Common batch operations:
 
 | Operation | Arguments |
 | --- | --- |
-| `place_component` | `name, reference, x, y`, optional `family, group, manufacturer, parameters, anchor, pin, angle, mirror_axis, value, expression` |
-| `set_parameter` | `component_ref, index`, exactly one of `value, expression` |
+| `place_component` | `name, reference, x, y`, optional `family, group, manufacturer, parameters, params, anchor, pin, angle, mirror_axis, value, expression` |
+| `set_parameter` | `component_ref`, optional `index, name, role` (defaults to unique `value` slot), exactly one of `value, expression` |
 | `connect_endpoints` | `source, target`, optional `points` |
 | `move_component` | `component_ref, dx, dy` (relative displacement) |
 | `move_component_label` | `component_ref, x, y`, optional `kind: reference | value` (absolute label center) |
@@ -62,6 +72,7 @@ Common batch operations:
 | `add_text`, `update_text` | `text, x, y`; update additionally takes `object_id`, and omitted text/coordinates retain their values |
 | `delete_object` | exactly one of `object_id, component_ref` |
 | `update_sheet` | supplied `title, page, width, height` fields; omitted fields retain their values |
+| `fit_sheet`, `translate_sheet` | `fit_sheet {margin?, resize?}` shifts off-page/negative objects inward and optionally resizes; `translate_sheet {dx, dy}` shifts all sheet items |
 
 Default public results omit unused native parameter slots. `parameter_count` and `parameters_complete` describe the returned metadata; use `include_parameters: true` on placement/preparation/batches, or `native_get_parameters`, when full slots are needed. Experiment values and supplied parameter edits are retained. Higher-level obstacle planning remains available through standalone `native_auto_route_wire(engine: obstacle)`.
 
@@ -78,6 +89,7 @@ Use `native_connect_endpoints` with `{"component_ref":"R1","pin":"2"}` or `{"jun
 - `native_configure_wiring` reads or sets native `autowire_on_connection`, `autowire_on_move`, `connect_touching` and `move_connection_limit` options. Settings restore on close or `reset: true`. Moves below the limit reroute through Multisim; other moves preserve attachments and route shape.
 - With `connect_touching` enabled, placement and movement connect contacts automatically. `native_connect_touching` also processes existing contacts. Interior wire contacts create native branch junctions; ambiguous crossings of different nets return an error. Consume returned state after wire splitting.
 - `native_auto_route_wire` defaults to Multisim's native router, preserving the wire ID and electrical endpoints. Native routing requires endpoints inside the actual sheet. `native_plan_wire_route` previews the MCP obstacle planner; choose `engine: obstacle` to apply its route with `clearance` in sheet units.
+- `native_label_wire(wire_id, name)` sets the electrical net name; empty names and net names already used on a distinct electrical net on the selected sheet are rejected cleanly (connect with a wire, junction, power symbol or On-Page connector instead).
 - Inspect `native_check_layout` for missing connector attachment, invisible wire pens, overlapping symbols and obstructed routes. Then inspect the exported schematic for presentation issues.
 
 ## Sheets and hierarchy
@@ -103,13 +115,13 @@ Embedded model text may be shared by several components. `native_set_model_text`
 For a finished schematic:
 
 1. Read `page.bounds` and the complete `content_bounds` after placing, routing and adding text. Require `content.left >= page.left + margin`, `content.top >= page.top + margin`, `content.right <= page.right - margin` and `content.bottom <= page.bottom - margin`. A margin of 18–36 sheet units is usually sufficient. Repeat on each edited sheet.
-2. For a new modest circuit, lay it out inside the initial sheet rather than placing it thousands of units away. If an existing layout just needs more space on the right or bottom, resize the real sheet with `native_edit_batch`:
+2. For a new modest circuit, lay it out inside the initial sheet rather than placing it thousands of units away. If an existing layout has negative coordinates or exceeds the sheet bounds, call `native_fit_sheet(margin=36, resize=True)` (or batch `fitSheet`) to shift all components, junctions, wire routes and free text inward by a grid-aligned offset and optionally resize the sheet in one undoable edit. If you only need more space on the right or bottom, you can also resize explicitly with `sheetSize`:
 
    ```json
    {"operations":[{"operation":"sheetSize","arguments":{"width":1200,"height":900}}],"include_state":true}
    ```
 
-   Compute the required dimensions from the actual content bounds and margin; these numbers are an example. Resizing the sheet preserves component positions and electrical connections. Merely increasing width and height does not fix negative left/top coordinates. Such a layout requires moving its complete contents inward, including text, branches and wire routes; moving only the components can leave other objects behind.
+   Compute dimensions from actual content bounds and margin; these numbers are an example. Resizing alone preserves positions and connections and does not fix negative left/top coordinates (use `native_fit_sheet` or `translateSheet` for that).
 3. Consume the returned state to check containment. Save with native readback enabled and inspect `page_check` and `verification`. A passing independently reopened copy already verifies persistence; close and reopen manually only when investigating a readback failure or when explicitly requested. Select the relevant sheet for a multi-sheet export.
 4. Export the verified sheet with `fit_content: false` and no `region`. Inspect this full-page image before producing any optional cropped image. If the user will verify simulation themselves, this geometry check does not require starting a simulation.
 

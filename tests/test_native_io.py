@@ -13,7 +13,7 @@ def test_unicode_session_outputs_and_verified_saved_copy(tmp_path,monkeypatch):
     monkeypatch.setattr(bridge,'DATA_DIR',data);monkeypatch.setattr(service,'DATA_DIR',data)
     host=EditorService()
     try:
-        host.create('Unicode paths')
+        host.create('Unicode paths',str(tmp_path/'unicode-paths.ms14'))
         host.batch([{'operation':'place','arguments':{'name':name,'ref':ref,'x':x,'y':y,'anchor':'pin','pin':'1',
                     **({'parameters':[{'index':1,'value':value}]} if value is not None else {})}}
                     for name,ref,x,y,value in [('DC_POWER','V1',90,90,12),('RESISTOR_VIRTUAL','R1',360,90,1000),

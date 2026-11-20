@@ -11,6 +11,7 @@ OPERATIONS={
     'create_sheet':'createSheet','create_subcircuit':'createSubcircuit',
     'create_hierarchical_port':'createPort','update_hierarchical_port':'updatePort',
     'update_sheet':'updateSheet','move_junction':'moveJunction','repair_wire_geometry':'repairWireGeometry',
+    'fit_sheet':'fitSheet','translate_sheet':'translateSheet',
 }
 COMPONENT_OPERATIONS={'copy','remove','move','alignPin','moveLabel','transform','setParameter',
                       'setModelText','rename','replace'}
@@ -40,6 +41,10 @@ def normalize_edit(operation):
     if name=='moveJunction':rename_field(args,'junction_id','id')
     if name in ('place','createSubcircuit'):rename_field(args,'reference','ref')
     if name=='transform':rename_field(args,'mirror_axis','axis')
+    if name=='setParameter':
+        for key in ('index','name','role'):
+            if key in args and args[key] is None:
+                args.pop(key)
     if name=='connectTouching':rename_field(args,'component_refs','refs')
     if name=='autoWire' and args.get('engine','native')!='native':
         raise ValueError('Batch autoWire uses the native router; use native_auto_route_wire(engine="obstacle") for obstacle planning')

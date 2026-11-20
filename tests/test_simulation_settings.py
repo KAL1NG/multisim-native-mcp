@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from multisim_native_mcp.persistence import persistence_capabilities
 from multisim_native_mcp.service import EditorService,NativeEditError
-from multisim_native_mcp.settings import normalize_setting_changes,saved_execution,validate_analysis_options
+from multisim_native_mcp.settings import analysis_changes,normalize_setting_changes,saved_execution,validate_analysis_options
 from multisim_native_mcp.workflow_contracts import WorkflowPlan
 
 
@@ -157,3 +157,29 @@ def test_workflow_executes_settings_and_source_save_and_exposes_backup(tmp_path)
     assert result['status']=='complete',result
     assert [op for op,_ in calls]==['settings','display','save']
     assert result['results']['save']['backup']=='source.bak'
+
+
+def test_tran_analysis_changes_reset_tstart_and_dc_sweep_options_validate():
+    tran_changes = {tuple(c['path']): c['value'] for c in analysis_changes('tran', 1e-4, 0.01, False, 'dec', 20, 1.0, 1e5)}
+    assert tran_changes[('ANALYSIS', 'TSTART')] == 0
+    assert tran_changes[('ANALYSIS', 'TMAX')] == 'calculate'
+    assert tran_changes[('ANALYSIS', 'TSTEP')] == 1e-4
+    assert tran_changes[('ANALYSIS', 'TSTOP')] == 0.01
+
+    # Valid rising and falling DC sweeps
+    validate_analysis_options('dc', dc_source='V1', dc_start=0.0, dc_stop=5.0, dc_step=0.5)
+    validate_analysis_options('dc', dc_source='V1', dc_start=5.0, dc_stop=0.0, dc_step=-0.5)
+
+    for bad_dc in [
+        {'dc_source': ''},
+        {'dc_source': '   '},
+        {'dc_source': 'V1\x00'},
+        {'dc_source': 'V1', 'dc_start': True, 'dc_stop': 5.0, 'dc_step': 1.0},
+        {'dc_source': 'V1', 'dc_start': 0.0, 'dc_stop': 5.0, 'dc_step': 0.0},
+        {'dc_source': 'V1', 'dc_start': 0.0, 'dc_stop': 5.0, 'dc_step': -1.0},
+        {'dc_source': 'V1', 'dc_start': 5.0, 'dc_stop': 0.0, 'dc_step': 1.0},
+        {'dc_source': 'V1', 'persist': True},
+        {'dc_source': 'V1', 'use_saved_settings': True},
+    ]:
+        with pytest.raises(ValueError):
+            validate_analysis_options('dc', **bad_dc)

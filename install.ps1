@@ -1,9 +1,9 @@
 [CmdletBinding()]
 param(
-    [string]$Version = '0.5.2',
+    [string]$Version = '0.5.3',
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'MultisimNativeMCP'),
     [string]$Source,
-    [ValidateSet('codex','dsh','none')][string]$Client = 'codex',
+    [ValidateSet('codex','dsh','json','antigravity','none')][string]$Client = 'codex',
     [string]$Profile = 'desktop',
     [string]$ConfigPath,
     [string]$MultisimPath,
@@ -18,6 +18,7 @@ $launcher = Join-Path $binDirectory 'multisim-native-mcp.exe'
 $pathArguments = @()
 if ($MultisimPath) { $pathArguments = @('--multisim-path',$MultisimPath) }
 $reuseInstallation = $false
+$environmentRoot = $null
 if (-not $Force -and -not $Source -and -not ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'src\multisim_native_mcp\__init__.py'))) -and (Test-Path -LiteralPath $launcher)) {
     try {
         $existingVersion = & $launcher --version 2>$null
@@ -73,9 +74,26 @@ try {
         & $launcher @configArguments
         if ($LASTEXITCODE -ne 0) { throw "$Client configuration failed." }
     }
+    $environmentsDirectory = Join-Path $toolsDirectory 'environments'
+    if (Test-Path -LiteralPath $environmentsDirectory) {
+        $oldEnvironments = Get-ChildItem -LiteralPath $environmentsDirectory -Directory -Filter 'install-*' |
+            Sort-Object @{ Expression = { [bool]($environmentRoot -and $_.FullName -eq $environmentRoot) }; Descending = $true }, @{ Expression = { $_.LastWriteTimeUtc }; Descending = $true } |
+            Select-Object -Skip 2
+        foreach ($oldEnv in $oldEnvironments) {
+            try {
+                $probe = Join-Path $environmentsDirectory ('.pruning-' + [guid]::NewGuid().ToString('N'))
+                [IO.Directory]::Move($oldEnv.FullName, $probe)
+                Remove-Item -LiteralPath $probe -Recurse -Force -ErrorAction Stop
+            } catch {
+                # Ignore environments locked by an active running server.
+            }
+        }
+    }
     Write-Host "Installed: $launcher"
     if ($Client -eq 'codex') { Write-Host 'Restart Codex to load Multisim Native MCP.' }
     elseif ($Client -eq 'dsh') { Write-Host "DSH profile '$Profile' reloads the MCP connection automatically." }
+    elseif ($Client -eq 'antigravity') { Write-Host 'Reload MCP servers in Antigravity to load Multisim Native MCP.' }
+    elseif ($Client -eq 'json') { Write-Host 'Restart or reload your MCP client to load Multisim Native MCP.' }
     else { & $launcher config @pathArguments }
 }
 finally {

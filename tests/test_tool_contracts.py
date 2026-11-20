@@ -48,11 +48,16 @@ def test_stdio_schema_and_alias_validation_before_waveform_read(tmp_path):
                 tools={t.name:t for t in (await session.list_tools()).tools}
                 schema=tools['native_verify_waveform'].model_dump(by_alias=True)['inputSchema']
                 assert 'id' in schema['$defs']['AcceptanceCriterion']['properties']
+                assert {'component_ref','pin'} <= schema['$defs']['PinSignal']['properties'].keys()
                 for key in ['id','measurement']:
                     result=await session.call_tool('native_verify_waveform',{'raw_path':str(raw),'measurements':[{'id':'v','metric':'mean','signal':'V(1)'}],'criteria':[{key:'v','target':6}]})
                     assert not result.is_error
                     data=result.structured_content or json.loads(result.content[0].text)
                     assert data['passed']
+                selector_result=await session.call_tool('native_measure_waveform',{
+                    'raw_path':str(raw),'measurements':[{'metric':'mean','signal':{'component_ref':'R1','pin':'1'}}],
+                })
+                assert selector_result.is_error and 'Open the circuit' in ' '.join(c.text for c in selector_result.content if hasattr(c,'text'))
                 result=await session.call_tool('native_verify_waveform',{'raw_path':'absent.raw','measurements':[{'id':'v','metric':'mean','signal':'V(1)'}],'criteria':[{'target':6}]})
                 assert result.is_error
                 message=' '.join(c.text for c in result.content if hasattr(c,'text'))

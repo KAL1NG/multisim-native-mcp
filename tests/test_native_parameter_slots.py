@@ -14,7 +14,7 @@ pytestmark = pytest.mark.native
 def test_value_slot_controls_native_resistance_and_current(tmp_path):
     host = EditorService()
     try:
-        host.create('Parameter slot comparison')
+        host.create('Parameter slot comparison', str(tmp_path / 'parameter-slots.ms14'))
         operations = []
         for name, ref, x, y, index, value in [
             ('DC_POWER', 'V1', 108, 108, 1, 12),

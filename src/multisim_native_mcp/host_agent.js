@@ -3,7 +3,6 @@ const keep = [];
 const jobs = [];
 const functions = new Map();
 const stringMethods = new Map();
-const objectHandles = new Map();
 let cachedDiagram = null;
 let selectedProjectIndex = 0;
 let selectedSheetId = null;
@@ -75,7 +74,6 @@ function enumerate() {
   const objects = [];
   while (!pos.readPointer().isNull()) {
     const p = next(d.composite, pos);
-    objectHandles.set(p.toString(),p);
     objects.push({ id: p.toString(), ...rtti(p) });
   }
   return { path: projectPath(d.proj), objects };
@@ -116,7 +114,6 @@ function components() {
   const d=diagram();const result=[];
   for(const obj of listChildren(d.composite)) {
     try {basePointer(obj,'.?AVCIITSymbolComp@@');}catch(_){continue;}
-    objectHandles.set(obj.toString(),obj);
     const ci=ptrFunction('Od101dll.dll','?GetCiComponent@CIITSymbolComp@@UBEPAVCiComponent@@XZ',['pointer'])(basePointer(obj,'.?AUIRefDesable@@'));
     if(ci.isNull())continue;
     const localRef=returnedString('CIRCEXP.dll','?GetLocalName@CiElement@@',ci);
@@ -126,7 +123,6 @@ function components() {
       const pin=returnedString('Od101dll.dll','?GetPinName@CIITPinSymbolComp@@',child);
       const connector=listChildren(child).find(p=>/CIITPinConnectorComp/.test(rtti(p).name));
       if(!connector)continue;
-      objectHandles.set(connector.toString(),connector);
       const count=native('Od101dll.dll','?GetConnectionCount@CODConnector@@QBEHXZ','int',['pointer'])(connector);
       pins.push({name:pin,id:connector.toString(),connections:count,...connectorGeometry(connector)});
     }
@@ -160,17 +156,19 @@ function movePreservingGeometry(args) {
   const after=matrix(object);
   const pins=component(c.id).pins;
   for(const w of attached) {
-    let points=w.points;
+    let points=w.points.length>=2?w.points.map(p=>({...p})):w.points.length===1?[{...w.points[0]},{...w.points[0]}]:[{x:w.source.x,y:w.source.y},{x:w.target.x,y:w.target.y}];
     for(const end of ['source','target']) {
       if(!ownsEndpoint(c,w[end]))continue;
       const pin=pins.find(p=>p.id===w[end].id);
-      if(!pin || points.length<2)throw new Error('Cannot update a wire endpoint');
+      if(!pin)throw new Error('Cannot update a wire endpoint');
       if(end==='source')points=points.slice().reverse();
       const old=points[points.length-1],previous=points[points.length-2],next={x:pin.x,y:pin.y};
       const corner=previous.y===old.y?{x:next.x,y:old.y}:{x:old.x,y:next.y};
       points=[...points.slice(0,-1),corner,next].filter((p,i,all)=>i===0||p.x!==all[i-1].x||p.y!==all[i-1].y);
+      if(points.length===1)points.push({...points[0]});
       if(end==='source')points.reverse();
     }
+    if(points.length===1)points.push({...points[0]});
     setWirePoints(ptr(w.id),points);
   }
   return {id:c.id,ref:c.ref,before,after,pins,updated_wires:attached.length};

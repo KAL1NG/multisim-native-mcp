@@ -10,7 +10,7 @@ Read `native_simulation_settings` before changing a setting:
 {"scope":"interactive","analysis_type":"TRAN"}
 ```
 
-The response contains `available_analyses`, typed scalar `fields` with exact relative paths, `solver_options` with enabled states, and a `revision`. Multisim 14.3 supplies 19 profiles in both `interactive` and `analysis` scopes: OP, AC, PHASOR, TRAN, FOUR, NOISE, DISTO, PSWEEP, TSWEEP, PZ, TF, DC_SWEEP, SENS, WORST, MONTE, USER, RUN, TRACEWIDTH and NOISE_FIGURE. Existing scalar fields are editable; whole native lists, empty profile lists and analysis instances are not created by this API. RAW/CSV execution supports OP, AC and TRAN; other profile settings are retained for Multisim's native analyses.
+The response contains `available_analyses`, typed scalar `fields` with exact relative paths, `solver_options` with enabled states, and a `revision`. Multisim 14.3 supplies 19 profiles in both `interactive` and `analysis` scopes: OP, AC, PHASOR, TRAN, FOUR, NOISE, DISTO, PSWEEP, TSWEEP, PZ, TF, DC_SWEEP, SENS, WORST, MONTE, USER, RUN, TRACEWIDTH and NOISE_FIGURE. Existing scalar fields are editable; whole native lists, empty profile lists and analysis instances are not created by this API. RAW/CSV execution supports OP, AC, TRAN and DC sweeps; other profile settings are retained for Multisim's native analyses.
 
 For example, customize interactive transient accuracy, integration, convergence, temperature and digital thresholds, then save directly to the source file:
 
@@ -47,16 +47,16 @@ Without `save_to_source`, changes remain in the editable native document: call `
 
 | Capability | Destination and behavior |
 | --- | --- |
-| Component values, expressions, embedded models, placements, labels, wires, ports, subcircuits, annotations and sheets | Native document; save through `native_save_source` or `native_save_copy`. Model changes refresh every affected label before saving. |
+| Component values, expressions, embedded models, placements, labels, wires, ports, subcircuits, annotations, sheets and `native_fit_sheet` | Native document; save through `native_save_source` or `native_save_copy`. Model changes refresh every affected label before saving. |
 | Native page name | Saved using `SetPageName`; the root window caption still follows the filename after reopening. |
 | Grid, border and bounds | `native_configure_sheet_display` modifies the selected sheet's native preferences; save the document or pass `save_to_source:true`. |
 | Autowiring and movement thresholds | Native **application-wide** preferences. `native_configure_wiring(persist:true)` saves through Multisim and verifies reloading, after reloading. These are not `.ms14` fields; temporary mode remains the default. |
 | Title-block export visibility | Rendering flag only. Native load derives title-block presence from title-block graphics and overwrites a standalone `Title Block ON` value. It is an export rendering option. |
 | Runtime start/pause/stop, simulation clock and LED/display phase | Live solver state; not portable circuit design settings. |
-| Export DPI, crop, clean-frame flags and PNG/BMP/RAW/CSV results | External artifacts. Export cropping does not resize the document. |
+| Export DPI, crop, clean-frame flags and PNG/BMP/RAW/CSV/SVG results | External artifacts (`native_export_image`, `native_plot_waveform`, analysis outputs). Export cropping does not resize the document. |
 | MCP sweeps, objectives, acceptance criteria, workflow plans and execution logs | Durable external experiment/workflow records, with native checkpoint circuits. They are not native PSWEEP definitions. Trials restore the original circuit; apply a selected candidate's parameter values explicitly, then save to retain the design. |
 | Undo/redo and metadata caches | Session state. The resulting restored design can be saved; process-local history cannot be embedded as a portable circuit. |
-| Inspection, routing plans and waveform calculations | Read-only outputs; no document setting to save. |
+| Inspection, connectivity, signal resolution, routing plans and waveform calculations | Read-only outputs (`native_get_connectivity`, `native_resolve_signal`, `native_plan_wire_route`, `native_measure_waveform`); no document setting to save. |
 
 `native_save_source` saves **all** current document edits, not just simulation settings. It checks external source changes, creates a backup and saves natively to a staged file. Reopen verification is enabled by default; `verify:false` skips that step and is reported as `verification.skipped:true`. Verification covers persistent wire names and visibility, components/parameters, embedded SPICE text, connectivity/geometry, labels, annotations, page names, grid/border/bounds and the complete simulation-information property. New circuits are created directly as workspace files and use the same normal source save; packaged templates remain internal resources.
 
@@ -68,7 +68,7 @@ Without `save_to_source`, changes remain in the editable native document: call `
 
 自动连线偏好是软件全局设置，`persist:true` 保存到 Multisim 应用配置并验证，保存位置独立于 `.ms14`。运行中的仿真时间、暂停位置、灯光相位、导出参数、波形文件和 MCP 工作流/实验记录各有其运行时或外部保存位置。标题栏临时渲染开关会被原生加载逻辑覆盖，属于导出渲染选项。用 `native_persistence_capabilities` 可查询所有工具的准确保存归属。
 
-## File editing defaults (0.5.1)
+## File editing defaults
 
 New circuits are real `.ms14` files in the task workspace from the start. The calling skill/agent resolves the filename from the task context and supplies an absolute `output_path`; the MCP has no global workspace or project-directory configuration. `native_open_circuit` and workflow `mode:open` edit the actual source. A single running Multisim is reused, opening/selecting the requested source while preserving its other projects. Multiple running processes can be selected with `native_attach`.
 

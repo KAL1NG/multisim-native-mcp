@@ -15,7 +15,8 @@
 | kind | Main fields |
 | --- | --- |
 | `session` | `mode: create/open/attach`, required `output_path` for create, `source_path` for open, `pid`, `project_index`; direct mode by default, `isolated_copy: true` only for explicit comparisons; first stage only |
-| `select` | `components: {name: {ref/local_ref/id, pin?, x?, y?}}`; unique native object selection |
+| `select_sheet` | `index`, `title` or `sheet_id` to select a sheet in multi-sheet circuits |
+| `select` | `components: {name: {ref/component_ref/local_ref/id, pin?, x?, y?}}`; unique native object selection |
 | `prepare` | `components: [{name, family, group, manufacturer}]` |
 | `wiring` | `autowire_on_connection`, `autowire_on_move`, `connect_touching`, `move_connection_limit`, `persist: false` (application-wide) |
 | `simulation_settings` | `scope`, `analysis_type`, typed `changes`, `solver_options`, `expected_revision` |
@@ -27,15 +28,15 @@
 | `verify` | `raw_path`, `measurements`, `criteria`; reuse an existing analysis |
 | `decode` | `raw_path`, `digits`, `expected`, `options` for scanned-display decoding |
 | `save` | normal current-document save by default; optional `output_path` for Save As; `overwrite`, `allow_off_page`, `verify` (default true) |
-| `export` | absolute `output_path`, `overwrite`, `dpi`, `fit_content`, `show_frame`, `show_grid` |
-| `interactive` | time steps, `real_time`, `persist: true`, `captures`, `overwrite`, `stop_after: true` |
+| `export` | absolute `output_path`, `overwrite`, `dpi`, `scale`, `region`, `fit_content`, `padding`, `show_frame`, `show_grid` |
+| `interactive` | time steps, `real_time`, `persist: true`, `captures` (supporting `dpi`, `scale`, `region`, `fit_content`, `padding`, `show_frame`, `show_grid`), `overwrite`, `stop_after: true` |
 | `close` | save pending edits by default, then close/detach; `save_changes: false` skips saving |
 
-`options` on an analysis uses `analysis: op/tran/ac`, `step`, `stop`, `use_initial_conditions`, `ac_sweep`, `ac_points`, `ac_start` and `ac_stop`. Add `persist: true` to retain explicit run arguments in the native analysis profile, or `use_saved_settings: true` to execute stored analysis and solver options. Follow with `save` to write configured settings to a file. These two flags are exclusive.
+`options` on an analysis uses `analysis: op/tran/ac/dc`, `step`, `stop`, `use_initial_conditions`, `ac_sweep`, `ac_points`, `ac_start`, `ac_stop`, `dc_source`, `dc_start`, `dc_stop`, and `dc_step`. Add `persist: true` to retain explicit run arguments in the native analysis profile, or `use_saved_settings: true` to execute stored OP/AC/TRAN analysis and solver options. Follow with `save` to write configured settings to a file. These two flags are exclusive. Measurements support `min`, `max`, `mean`, `rms`, `peak_to_peak`, `frequency`, `duty_cycle`, `period`, `rise_time`, `fall_time`, `overshoot`, `value_at` (`at`), `gain_db`, `phase_deg`, `magnitude`, `bandwidth_3db`, `phase_margin` and `plot_index`.
 
 An edit operation's `bind` stores its result; every completed stage also binds its result to its `id`. Use `{"$ref":"lower.component.id"}`, `{"$ref":"split.junction_id"}` or `{"$ref":"dc.raw_path"}`. References must name earlier results. Array indices use dot notation. `{"$add":[value,9]}` and `{"$sub":[value,9]}` compute two-term numeric offsets; they can contain references. No executable code is accepted.
 
-A placement's `arguments.value` or `arguments.expression` selects its unique primary-value slot; a string is a SPICE expression. Numeric primary placement values are formatted compactly. Inline `angle` and `mirror_axis` apply before final `anchor` alignment; positive degrees rotate clockwise on the sheet. `setParameter` can use `role: value` and an optional parameter `name` instead of `index`. Ambiguous slots return their descriptors rather than selecting a model option.
+A placement's `arguments.value`, `arguments.expression` or `arguments.params` selects named parameter slots; a string is a SPICE expression. Numeric primary placement values are formatted compactly. Inline `angle` and `mirror_axis` apply before final `anchor` alignment; positive degrees rotate clockwise on the sheet. `setParameter` can use `role: value` and an optional parameter `name` instead of `index`. Ambiguous slots return their descriptors rather than selecting a model option. `fitSheet` and `translateSheet` can adjust sheet layout inside an `edit` stage.
 
 Within an edit stage, the executor prepares metadata, resolves dependencies and sends native groups of at most eight operations. The groups yield to Multisim between slices and share the stage's rollback checkpoint. Library selection, actual pin resolution, native handle refresh and subsequent argument binding happen locally.
 
@@ -67,7 +68,7 @@ Analysis selectors avoid guessing vector numbering:
 ]}
 ```
 
-Explicit waveform names remain supported. For AC gain/phase, `reference` can also be a `{ref,pin}` selector.
+Explicit waveform names remain supported, and signal selectors accept `{"component_ref":..., "pin":...}` as well as `{"ref":..., "pin":...}`. For AC gain/phase, `reference` can also be a `{component_ref|ref, pin}` selector.
 
 ## Shared power symbols and branches
 
@@ -82,7 +83,7 @@ For an existing drawing, a `select` stage can distinguish repeated references by
 ]}
 ```
 
-Each image is a real instantaneous native frame. The executor waits locally for the requested digit and stops after the captures. Set time steps for the circuit's actual signal rates. For numerical scan acceptance, put `decode` after a transient stage and reference its RAW path.
+Each image is a real instantaneous native frame. `expected_digit` accepts `0`–`9` and `A`–`F` for compatible displays. The executor waits locally for the requested digit and stops after the captures. Set time steps for the circuit's actual signal rates. For numerical scan acceptance, put `decode` after a transient stage and reference its RAW path.
 
 Check `status` before reporting completion. Default results contain key acceptance and output paths; the detailed record retains raw analysis, bindings, completed phases, failure diagnostics and call statistics. `stats.external_calls` counts workflow API calls, not model reasoning turns. `stats.native_calls` counts host RPCs.
 

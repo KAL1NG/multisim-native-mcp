@@ -110,18 +110,28 @@ def simplify(points):
 
 
 def plan_wire(components,wire,clearance=9):
-    if not isinstance(clearance,int) or clearance<0:raise ValueError('Clearance must be nonnegative')
-    obstacles=[{k:v+(-clearance if k in ('left','top') else clearance) for k,v in c['bounds'].items()} for c in components]
-    lookup={c['ref']:i for i,c in enumerate(components)}
+    if isinstance(clearance,bool) or not isinstance(clearance,int) or clearance<0:raise ValueError('Clearance must be nonnegative')
+    obstacles=[{k:v+(-clearance if k in ('left','top') else clearance) for k,v in (c.get('body_bounds') or c['bounds']).items()} for c in components]
+    by_id={c['id']:i for i,c in enumerate(components) if c.get('id')}
+    by_pin={p['id']:i for i,c in enumerate(components) for p in c.get('pins',[]) if p.get('id')}
+    by_ref={c['ref']:i for i,c in enumerate(components)}
+    def in_rect(pt,r):return r['left']<pt['x']<r['right'] and r['top']<pt['y']<r['bottom']
     leads=[]
     for end,index in [('source',0),('target',-1)]:
-        p=dict(wire['points'][index]);owner=lookup.get(wire[end].get('ref'))
+        p=dict(wire['points'][index]);ep=wire[end]
+        cid=ep.get('component_id');pid=ep.get('id')
+        owner=by_id[cid] if cid and cid in by_id else by_pin[pid] if pid and pid in by_pin else by_ref.get(ep.get('ref'))
         if owner is None:leads.append((p,p));continue
         r=obstacles[owner]
-        candidates=[{'x':r['left'],'y':p['y']},{'x':r['right'],'y':p['y']},
-                    {'x':p['x'],'y':r['top']},{'x':p['x'],'y':r['bottom']}]
-        escape=min(candidates,key=lambda q:abs(q['x']-p['x'])+abs(q['y']-p['y']))
-        if any(intersects(p,escape,o) for i,o in enumerate(obstacles) if i!=owner):raise ValueError('Pin escape is blocked by another component')
+        if not in_rect(p,r):
+            if any(in_rect(p,o) for i,o in enumerate(obstacles) if i!=owner):
+                raise ValueError('Pin escape is blocked by another component')
+            leads.append((p,p));continue
+        candidates=sorted([{'x':r['left'],'y':p['y']},{'x':r['right'],'y':p['y']},
+                           {'x':p['x'],'y':r['top']},{'x':p['x'],'y':r['bottom']}],
+                          key=lambda q:abs(q['x']-p['x'])+abs(q['y']-p['y']))
+        escape=next((q for q in candidates if not any(in_rect(q,o) or intersects(p,q,o) for i,o in enumerate(obstacles) if i!=owner)),None)
+        if escape is None:raise ValueError('Pin escape is blocked by another component')
         leads.append((p,escape))
     middle=orthogonal_path(leads[0][1],leads[1][1],obstacles)
     points=simplify([leads[0][0],*middle,leads[1][0]])

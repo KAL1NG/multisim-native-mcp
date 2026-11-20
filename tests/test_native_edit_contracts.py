@@ -11,7 +11,7 @@ pytestmark=pytest.mark.native
 def test_anchor_value_labels_frames_analysis_and_rollback(tmp_path):
     h=EditorService()
     try:
-        h.create('Native edit contracts')
+        h.create('Native edit contracts',str(tmp_path/'edit-contracts.ms14'))
         for name,ref,x,y,value in [('DC_POWER','V1',180,180,12),('RESISTOR_VIRTUAL','R1',360,180,1000),('RESISTOR_VIRTUAL','R2',540,180,1000),('GROUND','0',180,360,None)]:
             args={'name':name,'ref':ref,'x':x,'y':y,'anchor':'pin','pin':'1'}
             if value is not None:args['parameters']=[{'index':1,'value':value}]

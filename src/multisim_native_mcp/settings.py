@@ -28,14 +28,19 @@ def normalize_setting_changes(changes):
 
 def analysis_changes(analysis,step,stop,use_initial_conditions,ac_sweep,ac_points,ac_start,ac_stop):
     if analysis=='op':return []
-    fields={'TSTEP':step,'TSTOP':stop,'IC':'uic' if use_initial_conditions else 'auto_ic'} if analysis=='tran' else {
-        'VARIATION':ac_sweep,'NPOINTS_PER_VARIATION':ac_points,'FSTART':ac_start,'FSTOP':ac_stop}
+    if analysis=='tran':
+        fields={'TSTART':0,'TSTEP':step,'TSTOP':stop,'TMAX':'calculate','IC':'uic' if use_initial_conditions else 'auto_ic'}
+    elif analysis=='ac':
+        fields={'VARIATION':ac_sweep,'NPOINTS_PER_VARIATION':ac_points,'FSTART':ac_start,'FSTOP':ac_stop}
+    else:
+        raise ValueError(f'Persistent document analysis settings are not supported for {analysis}')
     return [{'path':['ANALYSIS',key],'value':value} for key,value in fields.items()]
 
 
-def validate_analysis_options(analysis,step,stop,use_initial_conditions,ac_sweep='dec',ac_points=20,
-                              ac_start=1.,ac_stop=100000.,persist=False,save_to_source=False,use_saved_settings=False):
-    if analysis not in ('op','tran','ac'):raise ValueError('analysis must be op, tran or ac')
+def validate_analysis_options(analysis,step=1e-5,stop=0.01,use_initial_conditions=False,ac_sweep='dec',ac_points=20,
+                              ac_start=1.,ac_stop=100000.,persist=False,save_to_source=False,use_saved_settings=False,
+                              dc_source=None,dc_start=0.,dc_stop=5.,dc_step=0.1):
+    if analysis not in ('op','tran','ac','dc'):raise ValueError('analysis must be op, tran, ac or dc')
     numeric=(step,stop,ac_start,ac_stop)
     if any(isinstance(v,bool) or not isinstance(v,(float,int)) or not math.isfinite(v) for v in numeric):
         raise ValueError('Analysis time and frequency values must be finite numbers')
@@ -49,6 +54,15 @@ def validate_analysis_options(analysis,step,stop,use_initial_conditions,ac_sweep
     if any(not isinstance(v,bool) for v in (persist,save_to_source,use_saved_settings)):raise ValueError('Persistence and saved-settings flags must be boolean')
     if save_to_source and not persist:raise ValueError('save_to_source requires persist=true')
     if persist and use_saved_settings:raise ValueError('Choose explicit run settings with persist or use_saved_settings, not both')
+    if analysis=='dc':
+        if persist or use_saved_settings:
+            raise ValueError('Persistent or saved document settings are not supported for dc analysis')
+        if not isinstance(dc_source,str) or not dc_source.strip() or '\0' in dc_source:
+            raise ValueError('dc_source must be a nonempty source name')
+        if any(isinstance(v,bool) or not isinstance(v,(float,int)) or not math.isfinite(v) for v in (dc_start,dc_stop,dc_step)):
+            raise ValueError('DC sweep start, stop and step must be finite numbers')
+        if dc_step==0 or (dc_stop-dc_start)*dc_step<=0:
+            raise ValueError('DC sweep step must be nonzero and advance from dc_start toward dc_stop')
 
 
 def saved_execution(settings):
