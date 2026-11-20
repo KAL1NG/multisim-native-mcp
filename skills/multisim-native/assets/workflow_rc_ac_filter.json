@@ -1,0 +1,183 @@
+{
+  "plan": {
+    "steps": [
+      {
+        "id": "session",
+        "kind": "session",
+        "mode": "create",
+        "title": "RC Low-Pass Filter",
+        "output_path": "C:/Circuits/rc_filter.ms14"
+      },
+      {
+        "id": "wiring",
+        "kind": "wiring",
+        "connect_touching": false,
+        "autowire_on_connection": true
+      },
+      {
+        "id": "build",
+        "kind": "edit",
+        "operations": [
+          {
+            "operation": "place",
+            "bind": "src",
+            "arguments": {
+              "name": "AC_VOLTAGE",
+              "ref": "V1",
+              "x": 162,
+              "y": 180,
+              "anchor": "pin",
+              "pin": "1",
+              "params": {
+                "voltage_pk": 1,
+                "frequency": "1k",
+                "ac_magnitude": 1
+              }
+            }
+          },
+          {
+            "operation": "place",
+            "bind": "r1",
+            "arguments": {
+              "name": "RESISTOR_VIRTUAL",
+              "ref": "R1",
+              "x": 288,
+              "y": 180,
+              "anchor": "pin",
+              "pin": "1",
+              "family": "RESISTOR",
+              "group": "Basic",
+              "params": {
+                "resistance": "1k"
+              }
+            }
+          },
+          {
+            "operation": "place",
+            "bind": "c1",
+            "arguments": {
+              "name": "CAPACITOR_VIRTUAL",
+              "ref": "C1",
+              "x": 432,
+              "y": 234,
+              "angle": 90,
+              "anchor": "pin",
+              "pin": "1",
+              "family": "CAPACITOR",
+              "group": "Basic",
+              "params": {
+                "capacitance": "100n"
+              }
+            }
+          },
+          {
+            "operation": "place",
+            "bind": "gnd",
+            "arguments": {
+              "name": "GROUND",
+              "x": 297,
+              "y": 360,
+              "anchor": "pin",
+              "pin": "1"
+            }
+          },
+          {
+            "operation": "wire",
+            "bind": "w_in",
+            "arguments": {
+              "source": { "ref": { "$ref": "src.component.id" }, "pin": "1" },
+              "target": { "ref": { "$ref": "r1.component.id" }, "pin": "1" }
+            }
+          },
+          {
+            "operation": "wire",
+            "bind": "w_out",
+            "arguments": {
+              "source": { "ref": { "$ref": "r1.component.id" }, "pin": "2" },
+              "target": { "ref": { "$ref": "c1.component.id" }, "pin": "1" }
+            }
+          },
+          {
+            "operation": "wire",
+            "arguments": {
+              "source": { "ref": { "$ref": "src.component.id" }, "pin": "2" },
+              "target": { "ref": { "$ref": "gnd.component.id" }, "pin": "1" }
+            }
+          },
+          {
+            "operation": "wire",
+            "arguments": {
+              "source": { "ref": { "$ref": "c1.component.id" }, "pin": "2" },
+              "target": { "ref": { "$ref": "gnd.component.id" }, "pin": "1" }
+            }
+          },
+          {
+            "operation": "labelWire",
+            "arguments": { "id": { "$ref": "w_in.id" }, "name": "VIN" }
+          },
+          {
+            "operation": "labelWire",
+            "arguments": { "id": { "$ref": "w_out.id" }, "name": "VOUT" }
+          },
+          {
+            "operation": "fitSheet",
+            "arguments": { "margin": 36, "resize": true }
+          }
+        ]
+      },
+      {
+        "id": "layout",
+        "kind": "layout",
+        "repair_geometry": true
+      },
+      {
+        "id": "ac",
+        "kind": "analysis",
+        "options": {
+          "analysis": "ac",
+          "ac_sweep": "dec",
+          "ac_points": 40,
+          "ac_start": 10,
+          "ac_stop": 1000000
+        },
+        "measurements": [
+          {
+            "id": "passband_db",
+            "metric": "gain_db",
+            "signal": { "component_ref": { "$ref": "c1.component.id" }, "pin": "1" },
+            "reference": { "component_ref": { "$ref": "src.component.id" }, "pin": "1" },
+            "frequency_hz": 10
+          },
+          {
+            "id": "cutoff_hz",
+            "metric": "bandwidth_3db",
+            "signal": { "component_ref": { "$ref": "c1.component.id" }, "pin": "1" },
+            "reference": { "component_ref": { "$ref": "src.component.id" }, "pin": "1" }
+          }
+        ],
+        "criteria": [
+          { "id": "passband_db", "target": 0, "absolute_tolerance": 0.05 },
+          { "id": "cutoff_hz", "target": 1591.55, "relative_tolerance": 0.02 }
+        ]
+      },
+      {
+        "id": "save",
+        "kind": "save",
+        "save_to_source": true
+      },
+      {
+        "id": "image",
+        "kind": "export",
+        "output_path": "C:/Circuits/rc_filter.png",
+        "dpi": 192,
+        "fit_content": true,
+        "padding": 27
+      },
+      {
+        "id": "close",
+        "kind": "close"
+      }
+    ]
+  },
+  "wait_timeout": 60
+}

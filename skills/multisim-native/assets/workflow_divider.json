@@ -5,7 +5,7 @@
         "id": "session",
         "kind": "session",
         "mode": "create",
-        "title": "Workflow divider",
+        "title": "Voltage Divider",
         "output_path": "C:/Circuits/divider.ms14"
       },
       {
@@ -24,11 +24,13 @@
             "arguments": {
               "name": "DC_POWER",
               "ref": "V1",
-              "x": 108,
+              "x": 180,
               "y": 180,
               "anchor": "pin",
               "pin": "1",
-              "value": 12
+              "params": {
+                "voltage": 12
+              }
             }
           },
           {
@@ -39,11 +41,14 @@
               "ref": "R1",
               "x": 360,
               "y": 180,
+              "angle": 90,
               "anchor": "pin",
               "pin": "1",
               "family": "RESISTOR",
               "group": "Basic",
-              "expression": "1k"
+              "params": {
+                "resistance": "1k"
+              }
             }
           },
           {
@@ -52,13 +57,16 @@
             "arguments": {
               "name": "RESISTOR_VIRTUAL",
               "ref": "R2",
-              "x": 540,
-              "y": 180,
+              "x": 360,
+              "y": 297,
+              "angle": 90,
               "anchor": "pin",
               "pin": "1",
               "family": "RESISTOR",
               "group": "Basic",
-              "expression": "1k"
+              "params": {
+                "resistance": "2k"
+              }
             }
           },
           {
@@ -66,134 +74,116 @@
             "bind": "ground",
             "arguments": {
               "name": "GROUND",
-              "x": 108,
-              "y": 450,
+              "x": 270,
+              "y": 414,
               "anchor": "pin",
               "pin": "1"
             }
           },
           {
             "operation": "wire",
+            "bind": "w_in",
             "arguments": {
-              "source": {
-                "ref": {
-                  "$ref": "supply.component.id"
-                },
-                "pin": "1"
-              },
-              "target": {
-                "ref": {
-                  "$ref": "upper.component.id"
-                },
-                "pin": "1"
-              }
+              "source": { "ref": { "$ref": "supply.component.id" }, "pin": "1" },
+              "target": { "ref": { "$ref": "upper.component.id" }, "pin": "1" }
+            }
+          },
+          {
+            "operation": "wire",
+            "bind": "w_out",
+            "arguments": {
+              "source": { "ref": { "$ref": "upper.component.id" }, "pin": "2" },
+              "target": { "ref": { "$ref": "lower.component.id" }, "pin": "1" }
             }
           },
           {
             "operation": "wire",
             "arguments": {
-              "source": {
-                "ref": {
-                  "$ref": "upper.component.id"
-                },
-                "pin": "2"
-              },
-              "target": {
-                "ref": {
-                  "$ref": "lower.component.id"
-                },
-                "pin": "1"
-              }
+              "source": { "ref": { "$ref": "supply.component.id" }, "pin": "2" },
+              "target": { "ref": { "$ref": "ground.component.id" }, "pin": "1" }
             }
           },
           {
             "operation": "wire",
             "arguments": {
-              "source": {
-                "ref": {
-                  "$ref": "lower.component.id"
-                },
-                "pin": "2"
-              },
-              "target": {
-                "ref": {
-                  "$ref": "supply.component.id"
-                },
-                "pin": "2"
-              }
+              "source": { "ref": { "$ref": "lower.component.id" }, "pin": "2" },
+              "target": { "ref": { "$ref": "ground.component.id" }, "pin": "1" }
             }
           },
           {
-            "operation": "wire",
-            "arguments": {
-              "source": {
-                "ref": {
-                  "$ref": "supply.component.id"
-                },
-                "pin": "2"
-              },
-              "target": {
-                "ref": {
-                  "$ref": "ground.component.id"
-                },
-                "pin": "1"
-              }
-            }
+            "operation": "labelWire",
+            "arguments": { "id": { "$ref": "w_in.id" }, "name": "VIN" }
+          },
+          {
+            "operation": "labelWire",
+            "arguments": { "id": { "$ref": "w_out.id" }, "name": "VOUT" }
+          },
+          {
+            "operation": "fitSheet",
+            "arguments": { "margin": 36, "resize": true }
           }
         ]
       },
       {
         "id": "layout",
-        "kind": "layout"
+        "kind": "layout",
+        "repair_geometry": true
       },
       {
-        "id": "dc",
+        "id": "op",
         "kind": "analysis",
-        "options": {
-          "analysis": "op"
-        },
+        "options": { "analysis": "op" },
         "measurements": [
           {
             "id": "midpoint",
             "metric": "mean",
-            "signal": {
-              "ref": {
-                "$ref": "lower.component.id"
-              },
-              "pin": "1"
-            }
+            "signal": { "component_ref": { "$ref": "lower.component.id" }, "pin": "1" }
           },
           {
             "id": "current",
             "metric": "mean",
-            "signal": {
-              "current": {
-                "$ref": "supply.component.id"
-              }
-            }
+            "signal": { "current": { "$ref": "supply.component.id" } }
           }
         ],
         "criteria": [
+          { "id": "midpoint", "target": 8, "absolute_tolerance": 0.001 },
+          { "id": "current", "target": -0.004, "absolute_tolerance": 1e-06 }
+        ]
+      },
+      {
+        "id": "dc_sweep",
+        "kind": "analysis",
+        "options": {
+          "analysis": "dc",
+          "dc_source": "V1",
+          "dc_start": 0,
+          "dc_stop": 12,
+          "dc_step": 1
+        },
+        "measurements": [
           {
-            "id": "midpoint",
-            "target": 6,
-            "absolute_tolerance": 1e-08
-          },
-          {
-            "id": "current",
-            "target": -0.006,
-            "absolute_tolerance": 1e-09
+            "id": "vout_at_6v",
+            "metric": "value_at",
+            "signal": { "component_ref": { "$ref": "lower.component.id" }, "pin": "1" },
+            "at": 6
           }
+        ],
+        "criteria": [
+          { "id": "vout_at_6v", "target": 4, "absolute_tolerance": 0.001 }
         ]
       },
       {
         "id": "save",
-        "kind": "save"
+        "kind": "save",
+        "save_to_source": true
       },
       {
         "id": "image",
         "kind": "export",
-        "output_path": "C:\\Circuits\\divider.png"
+        "output_path": "C:/Circuits/divider.png",
+        "dpi": 192,
+        "fit_content": true,
+        "padding": 27
       },
       {
         "id": "close",
@@ -201,5 +191,5 @@
       }
     ]
   },
-  "wait_timeout": 30
+  "wait_timeout": 60
 }

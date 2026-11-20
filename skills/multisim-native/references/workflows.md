@@ -32,7 +32,7 @@
 | `interactive` | time steps, `real_time`, `persist: true`, `captures` (supporting `dpi`, `scale`, `region`, `fit_content`, `padding`, `show_frame`, `show_grid`), `overwrite`, `stop_after: true` |
 | `close` | save pending edits by default, then close/detach; `save_changes: false` skips saving |
 
-`options` on an analysis uses `analysis: op/tran/ac/dc`, `step`, `stop`, `use_initial_conditions`, `ac_sweep`, `ac_points`, `ac_start`, `ac_stop`, `dc_source`, `dc_start`, `dc_stop`, and `dc_step`. Add `persist: true` to retain explicit run arguments in the native analysis profile, or `use_saved_settings: true` to execute stored OP/AC/TRAN analysis and solver options. Follow with `save` to write configured settings to a file. These two flags are exclusive. Measurements support `min`, `max`, `mean`, `rms`, `peak_to_peak`, `frequency`, `duty_cycle`, `period`, `rise_time`, `fall_time`, `overshoot`, `value_at` (`at`), `gain_db`, `phase_deg`, `magnitude`, `bandwidth_3db`, `phase_margin` and `plot_index`.
+`options` on an analysis uses `analysis: op/tran/ac/dc`, `step`, `stop`, `use_initial_conditions`, `ac_sweep`, `ac_points`, `ac_start`, `ac_stop`, `dc_source`, `dc_start`, `dc_stop`, and `dc_step`. Add `persist: true` to retain explicit run arguments in the native analysis profile, or `use_saved_settings: true` to execute stored OP/AC/TRAN analysis and solver options. Follow with `save` to write configured settings to a file. These two flags are exclusive. Measurements support `min`, `max`, `mean`, `rms`, `peak_to_peak`, `frequency`, `duty_cycle`, `period`, `rise_time`, `fall_time`, `overshoot`, `settling_time` (`tolerance`, `final_value`), `value_at` (`at`), `gain_db`, `phase_deg`, `magnitude`, `bandwidth_3db`, `phase_margin` and `plot_index`.
 
 An edit operation's `bind` stores its result; every completed stage also binds its result to its `id`. Use `{"$ref":"lower.component.id"}`, `{"$ref":"split.junction_id"}` or `{"$ref":"dc.raw_path"}`. References must name earlier results. Array indices use dot notation. `{"$add":[value,9]}` and `{"$sub":[value,9]}` compute two-term numeric offsets; they can contain references. No executable code is accepted.
 
@@ -40,9 +40,13 @@ A placement's `arguments.value`, `arguments.expression` or `arguments.params` se
 
 Within an edit stage, the executor prepares metadata, resolves dependencies and sends native groups of at most eight operations. The groups yield to Multisim between slices and share the stage's rollback checkpoint. Library selection, actual pin resolution, native handle refresh and subsequent argument binding happen locally.
 
-## Complete divider example
+## Reusable workflow templates
 
-Use the reusable [divider plan](../assets/workflow_divider.json). Create its output directory and replace the two absolute artifact filenames before submitting. It creates a native 12 V divider, checks layout, verifies 6 V and −6 mA, saves with readback, exports and closes. No separate netlist or waveform-read call is required.
+Adapt the templates in `assets/` by replacing the absolute `output_path` filenames in your workspace:
+
+- [workflow_divider.json](../assets/workflow_divider.json) — 12 V vertical voltage divider (`params`, `angle: 90`, `labelWire`, `fitSheet`, layout check, OP + DC sweep acceptance, verified save, 192 DPI PNG export, close).
+- [workflow_rc_ac_filter.json](../assets/workflow_rc_ac_filter.json) — 1st-order RC low-pass filter (`AC_VOLTAGE` with `ac_magnitude: 1`, decade AC sweep with `bandwidth_3db` and `gain_db` acceptance, verified save, PNG export; follow with `native_plot_waveform(..., reference="V(VIN)")` for a Bode PNG/SVG).
+- [workflow_interactive_indicators.json](../assets/workflow_interactive_indicators.json) — interactive `DCD_HEX` (`A`), `LED_red` and `PROBE_DIG` readout with live `expected_digit: "A"` capture (`fit_content: true`).
 
 The core dependency pattern is:
 
@@ -89,6 +93,4 @@ Check `status` before reporting completion. Default results contain key acceptan
 
 On failure, inspect the failed phase and its diagnostics, then resume with a replacement tail. Completed stages are retained. Failed edit stages roll back as one unit; analysis and file-output failures retain earlier successful edits and files. Reuse a failed acceptance run's `failure.details.raw_path` with a `verify` stage when only criteria need correction. A service restart marks unfinished work interrupted; resume can reopen the saved successful phase. Revision conflicts require inspection and the current `expected_revision`.
 
-Session creation writes a real workspace circuit from the start. Always supply an absolute output filename selected from the task context. Ordinary `mode: open` edits the actual source; a `save` stage needs no path to save it. A Save As output becomes the current document. Recovery files stay internal.
-
-An `open` session for the same currently selected direct-document path reuses its in-memory edits and handles, including after create/prepare. A different document or isolated comparison still requires closing the current session. Omit power-symbol refs and use placement bindings for multiple grounds or supply symbols.
+Opening the currently active direct-document path reuses its in-memory edits and handles; switching documents or starting an isolated comparison requires closing the current session first. Omit power-symbol `ref`s and use `bind` IDs for repeated ground/supply symbols.

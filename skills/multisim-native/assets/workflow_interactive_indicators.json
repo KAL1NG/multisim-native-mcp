@@ -1,0 +1,198 @@
+{
+  "plan": {
+    "steps": [
+      {
+        "id": "session",
+        "kind": "session",
+        "mode": "create",
+        "title": "Interactive Indicators",
+        "output_path": "C:/Circuits/indicators.ms14"
+      },
+      {
+        "id": "wiring",
+        "kind": "wiring",
+        "connect_touching": false,
+        "autowire_on_connection": true
+      },
+      {
+        "id": "build",
+        "kind": "edit",
+        "operations": [
+          {
+            "operation": "place",
+            "bind": "supply",
+            "arguments": {
+              "name": "DC_POWER",
+              "ref": "V1",
+              "x": 108,
+              "y": 216,
+              "anchor": "pin",
+              "pin": "1",
+              "params": {
+                "voltage": 5
+              }
+            }
+          },
+          {
+            "operation": "place",
+            "bind": "gnd",
+            "arguments": {
+              "name": "GROUND",
+              "x": 108,
+              "y": 396,
+              "anchor": "pin",
+              "pin": "1"
+            }
+          },
+          {
+            "operation": "place",
+            "bind": "hex",
+            "arguments": {
+              "name": "DCD_HEX",
+              "ref": "DS1",
+              "x": 270,
+              "y": 144,
+              "anchor": "center"
+            }
+          },
+          {
+            "operation": "place",
+            "bind": "r1",
+            "arguments": {
+              "name": "RESISTOR_VIRTUAL",
+              "ref": "R1",
+              "x": 450,
+              "y": 216,
+              "anchor": "pin",
+              "pin": "1",
+              "params": {
+                "resistance": 330
+              }
+            }
+          },
+          {
+            "operation": "place",
+            "bind": "led",
+            "arguments": {
+              "name": "LED_red",
+              "ref": "LED1",
+              "x": 558,
+              "y": 252,
+              "anchor": "pin",
+              "pin": "A"
+            }
+          },
+          {
+            "operation": "place",
+            "bind": "probe",
+            "arguments": {
+              "name": "PROBE_DIG",
+              "ref": "P1",
+              "x": 450,
+              "y": 144,
+              "anchor": "pin",
+              "pin": "1"
+            }
+          },
+          {
+            "operation": "wire",
+            "arguments": {
+              "source": { "ref": { "$ref": "supply.component.id" }, "pin": "2" },
+              "target": { "ref": { "$ref": "gnd.component.id" }, "pin": "1" }
+            }
+          },
+          {
+            "operation": "wire",
+            "arguments": {
+              "source": { "ref": { "$ref": "supply.component.id" }, "pin": "1" },
+              "target": { "ref": { "$ref": "hex.component.id" }, "pin": "4" }
+            }
+          },
+          {
+            "operation": "wire",
+            "arguments": {
+              "source": { "ref": { "$ref": "gnd.component.id" }, "pin": "1" },
+              "target": { "ref": { "$ref": "hex.component.id" }, "pin": "3" }
+            }
+          },
+          {
+            "operation": "wire",
+            "arguments": {
+              "source": { "ref": { "$ref": "supply.component.id" }, "pin": "1" },
+              "target": { "ref": { "$ref": "hex.component.id" }, "pin": "2" }
+            }
+          },
+          {
+            "operation": "wire",
+            "arguments": {
+              "source": { "ref": { "$ref": "gnd.component.id" }, "pin": "1" },
+              "target": { "ref": { "$ref": "hex.component.id" }, "pin": "1" }
+            }
+          },
+          {
+            "operation": "wire",
+            "arguments": {
+              "source": { "ref": { "$ref": "supply.component.id" }, "pin": "1" },
+              "target": { "ref": { "$ref": "r1.component.id" }, "pin": "1" }
+            }
+          },
+          {
+            "operation": "wire",
+            "arguments": {
+              "source": { "ref": { "$ref": "r1.component.id" }, "pin": "2" },
+              "target": { "ref": { "$ref": "led.component.id" }, "pin": "A" }
+            }
+          },
+          {
+            "operation": "wire",
+            "arguments": {
+              "source": { "ref": { "$ref": "led.component.id" }, "pin": "K" },
+              "target": { "ref": { "$ref": "gnd.component.id" }, "pin": "1" }
+            }
+          },
+          {
+            "operation": "wire",
+            "arguments": {
+              "source": { "ref": { "$ref": "supply.component.id" }, "pin": "1" },
+              "target": { "ref": { "$ref": "probe.component.id" }, "pin": "1" }
+            }
+          },
+          {
+            "operation": "fitSheet",
+            "arguments": { "margin": 36, "resize": true }
+          }
+        ]
+      },
+      {
+        "id": "live",
+        "kind": "interactive",
+        "time_step": 0.001,
+        "max_time_step": 0.001,
+        "real_time": true,
+        "persist": true,
+        "stop_after": true,
+        "captures": [
+          {
+            "output_path": "C:/Circuits/indicators_live.png",
+            "active_component": "DS1",
+            "expected_digit": "A",
+            "wait_timeout": 10,
+            "dpi": 192,
+            "fit_content": true,
+            "padding": 27
+          }
+        ]
+      },
+      {
+        "id": "save",
+        "kind": "save",
+        "save_to_source": true
+      },
+      {
+        "id": "close",
+        "kind": "close"
+      }
+    ]
+  },
+  "wait_timeout": 60
+}

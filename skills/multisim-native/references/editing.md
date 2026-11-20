@@ -24,6 +24,31 @@ When using `index` directly, index 1 applies specifically to `RESISTOR_VIRTUAL` 
 
 `POTENTIOMETER_VIRTUAL` and `POTENTIOMETER_RATED` expose total `resistance` and `wiper_step` (percent per adjustment). The rated part also exposes `rated_power`. `Potentiometer1_5K` has a fixed 5 kΩ resistance and exposes `wiper_step`. Verify their electrical response with native interactive simulation. The standalone numeric SPICE path can retain these models' placeholder resistors because it does not apply their interactive control code.
 
+## Common parts quick reference (Multisim 14.3)
+
+Sheet snap grid is **9** units (origin top-left, x right, y down, positive `angle` clockwise). `*` marks the primary `role: "value"` slot accepted by `value`/`expression` or index-free `set_parameter`.
+
+| Component | Pins & default offsets (sheet units) | Named `params` (unit) |
+| --- | --- | --- |
+| `RESISTOR_VIRTUAL` | `1` left, `2` right (`+45, 0`); `angle: 90` puts `1` top → `2` bottom | `resistance*` (Ohm) |
+| `CAPACITOR_VIRTUAL` | `1` left, `2` right (`+45, 0`); `angle: 90` puts `1` top → `2` bottom | `capacitance*` (F) |
+| `INDUCTOR_VIRTUAL` | `1` left, `2` right (`+45, 0`) | `inductance*` (H) |
+| `DC_POWER` | `1` (`+`) top, `2` (`-`) bottom (`0, +36`) | `voltage*` (V) |
+| `DC_CURRENT` | `1` top, `2` bottom (`0, +54`) | `current*` (A) |
+| `AC_POWER` | `1` top, `2` bottom (`0, +54`) | `voltage_rms*` (V), `frequency` (Hz), `ac_magnitude` (V) |
+| `AC_VOLTAGE` | `1` top, `2` bottom (`0, +54`) | `voltage_pk*` (V), `frequency` (Hz), `ac_magnitude` (V) |
+| `CLOCK_VOLTAGE` | `1` top, `2` bottom (`0, +54`) | `frequency*` (Hz), `duty_cycle` (%), `voltage` (V), `rise_time` (s), `fall_time` (s) |
+| `PULSE_VOLTAGE` | `1` top, `2` bottom (`0, +54`) | `initial_value` (V), `pulsed_value` (V), `rise_time` (s), `fall_time` (s), `pulse_width` (s), `period` (s) |
+| `GROUND` | `1` (single pin; net `"0"`) | — |
+| `VDD` / `VCC` / `VSS` / `VEE` | Pin name equals symbol (`"VDD"`, `"VCC"`, `"VSS"`, `"VEE"` — **not `"1"`**) | `voltage*` (V) |
+| `OPAMP_3T_VIRTUAL` | `IN+` `(0, 0)`, `IN-` `(0, +36)`, `OUT` `(+90, +18)` | `open_loop_gain`, `input_resistance` (Ohm), `output_resistance` (Ohm), `v_pos` (V), `v_neg` (V) |
+| `POTENTIOMETER_VIRTUAL` | `3` top `(0, -45)`, `1` bottom `(0, 0)`, wiper `2` left `(-27, -27)` | `resistance*` (Ohm), `wiper_step` (%) |
+| `POTENTIOMETER_RATED` | `3` top `(0, -63)`, `1` bottom `(0, 0)`, wiper `2` left `(-36, -36)` | `resistance*` (Ohm), `wiper_step` (%), `rated_power` (W) |
+| `LED_red` (and `LED_*`) | `A` (anode) top, `K` (cathode) bottom (`0, +54`) | `on_current*` (A) |
+| `SEVEN_SEG_COM_A` / `SEVEN_SEG_COM_K` | Bottom `A`..`G` left-to-right (step `9` units); `COM` directly above `A` (`-117` in y) | — |
+| `DCD_HEX` (and `DCD_HEX_*`) | Bottom `4` (MSB) → `3` → `2` → `1` (LSB), left-to-right (step `18` units) | — |
+| `PROBE_DIG` (and `PROBE_DIG_*`) | `1` (single pin) | — |
+
 ## Placement transforms and displayed values
 
 All placement entry points support `angle` (finite degrees), `mirror_axis` (`horizontal` reverses x, `vertical` reverses y), and either primary `value` or `expression`. The order is rotate, mirror, then translate to the selected `origin`, body `center`, or named `pin` anchor. Positive rotation is clockwise in sheet coordinates (x right, y down). For an LED with A above K, -90 degrees places A on the left; +90 places A on the right. Returned `pins`, `labels` and `placement.pin_offsets` describe the final symbol. Preparation states this convention, with offsets relative to its center anchor.
@@ -89,7 +114,7 @@ Use `native_connect_endpoints` with `{"component_ref":"R1","pin":"2"}` or `{"jun
 - `native_configure_wiring` reads or sets native `autowire_on_connection`, `autowire_on_move`, `connect_touching` and `move_connection_limit` options. Settings restore on close or `reset: true`. Moves below the limit reroute through Multisim; other moves preserve attachments and route shape.
 - With `connect_touching` enabled, placement and movement connect contacts automatically. `native_connect_touching` also processes existing contacts. Interior wire contacts create native branch junctions; ambiguous crossings of different nets return an error. Consume returned state after wire splitting.
 - `native_auto_route_wire` defaults to Multisim's native router, preserving the wire ID and electrical endpoints. Native routing requires endpoints inside the actual sheet. `native_plan_wire_route` previews the MCP obstacle planner; choose `engine: obstacle` to apply its route with `clearance` in sheet units.
-- `native_label_wire(wire_id, name)` sets the electrical net name; empty names and net names already used on a distinct electrical net on the selected sheet are rejected cleanly (connect with a wire, junction, power symbol or On-Page connector instead).
+- `native_label_wire(wire_id, name)` sets the electrical net name; empty names and net names already owned by a distinct net on the same sheet, flat sibling sheets or global power/ground rails are rejected cleanly (connect with a wire, junction, power symbol or On-Page connector instead).
 - Inspect `native_check_layout` for missing connector attachment, invisible wire pens, overlapping symbols and obstructed routes. Then inspect the exported schematic for presentation issues.
 
 ## Sheets and hierarchy
