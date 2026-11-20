@@ -12,16 +12,15 @@ _AXIS_UNITS = {'voltage': 'V', 'current': 'A', 'time': 's', 'frequency': 'Hz'}
 
 
 def _decode_raw(raw_bytes: bytes) -> str:
-    """Decode ASCII RAW bytes, falling back from UTF-8 to Windows/GBK/Latin-1 locales."""
+    """Decode RAW text as UTF-8 or GB18030 before trying the Windows code page."""
     if raw_bytes.startswith(b'\xef\xbb\xbf'):
         try:
             return raw_bytes.decode('utf-8-sig', errors='strict')
         except UnicodeDecodeError:
             pass
-    encodings = ['utf-8']
+    encodings = ['utf-8', 'gb18030']
     if os.name == 'nt':
         encodings.append('mbcs')
-    encodings.append('gb18030')
     for encoding in encodings:
         try:
             return raw_bytes.decode(encoding, errors='strict')
