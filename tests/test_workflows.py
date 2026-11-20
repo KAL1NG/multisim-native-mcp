@@ -521,3 +521,62 @@ def test_select_sheet_export_capture_dc_options_manufacturer_cancel_and_intra_st
             },
             {'id': 'a' * 32, 'bindings': {}},
         )
+
+
+def test_workflow_signal_uses_resolve_signal_and_rebinds_subsequent_selectors(tmp_path):
+    raw = tmp_path / 'op.raw'
+    raw.write_text(
+        'Plotname: DC Operating Point\n'
+        'Flags: real\n'
+        'No. Variables: 2\n'
+        'No. Points: 1\n'
+        'Variables:\n'
+        '0 v1 voltage V(new1)\n'
+        '1 v2 voltage V(new2)\n'
+        'Values:\n'
+        '0 5\n'
+        '2.5\n',
+        encoding='utf-8',
+    )
+    h = Host(tmp_path)
+    resolved_calls = []
+    capture_count = []
+
+    def resolve_signal(ref, pin):
+        resolved_calls.append((ref, pin))
+        if len(resolved_calls) == 1:
+            return {
+                'signal': 'V(new1)',
+                'handles_invalidated': True,
+                'handle_generation': 2,
+                'id_map': {'0xold1': '0xnew1', '0xold2': '0xnew2'},
+                'unresolved_ids': ['0xold_bad'],
+            }
+        return {'signal': 'V(new2)' if ref == '0xnew2' else f'V({ref})'}
+
+    h.resolve_signal = resolve_signal
+    mgr = WorkflowManager(h, tmp_path / 'records_sig')
+    mgr._capture = lambda rebind=True: capture_count.append(rebind) or {}
+
+    measured = mgr._measure(
+        str(raw),
+        [
+            {'id': 'a', 'metric': 'mean', 'signal': {'ref': '0xold1', 'pin': '1'}},
+            {'id': 'b', 'metric': 'mean', 'signal': {'component_ref': '0xold2', 'pin': '1'}},
+        ],
+        [],
+    )
+    assert [m['value'] for m in measured['measurements']] == [5.0, 2.5]
+    assert resolved_calls == [('0xold1', '1'), ('0xnew2', '1')]
+    assert capture_count == [True]
+
+    resolved_calls.clear()
+    with pytest.raises(NeedsInput, match='could not be rebound'):
+        mgr._measure(
+            str(raw),
+            [
+                {'id': 'a', 'metric': 'mean', 'signal': {'ref': '0xold1', 'pin': '1'}},
+                {'id': 'b', 'metric': 'mean', 'signal': {'ref': '0xold_bad', 'pin': '1'}},
+            ],
+            [],
+        )

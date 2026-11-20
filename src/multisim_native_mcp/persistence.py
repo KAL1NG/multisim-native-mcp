@@ -21,7 +21,7 @@ native_run_workflow native_workflow_status native_control_workflow'''),
     ('experiments','external_records','Trial specifications, constraints, objectives, results and reports are external durable experiment records. Trials restore original values; explicitly apply selected parameter values and save to retain a candidate in the circuit.', '''
 native_run_parameter_sweep native_start_experiment native_experiment_status native_list_experiments
 native_cancel_experiment native_retry_experiment native_export_experiment_report'''),
-    ('exports','external_files','PNG/BMP captures, waveform SVG plots and rendering options are external exports. Use native_configure_sheet_display to retain native sheet preferences. Runtime LED states are not saved design values.', '''
+    ('exports','external_files','PNG/BMP captures, waveform SVG/PNG plots and rendering options are external exports. Use native_configure_sheet_display to retain native sheet preferences. Runtime LED states are not saved design values.', '''
 native_export_image native_export_interactive_image native_plot_waveform'''),
     ('runtime_control','session','Start/pause/resume/stop, simulation time and runtime display states are live process state, not circuit configuration.', '''
 native_analysis_status native_interactive_status native_control_interactive native_control_analysis'''),

@@ -372,27 +372,47 @@ class WorkflowManager:
             if op.get('bind'):intra_binds.add(op['bind'])
         if issues:raise NeedsInput('Edit preflight failed',{'issues':issues})
 
-    def _signal(self,value):
+    def _signal(self,value,identity=None):
         if isinstance(value,str):return value
         if not isinstance(value,dict):raise ValueError('Signal must be a vector name or a component/pin selector')
         if 'pin' in value and set(value)<={'ref','component_ref','pin'} and ('ref' in value or 'component_ref' in value):
             if 'ref' in value and 'component_ref' in value and value['ref']!=value['component_ref']:
                 raise ValueError('Conflicting component_ref and ref; provide one value for this selector')
             ref=value['ref'] if 'ref' in value else value['component_ref']
+            if identity:
+                if ref in identity.get('unresolved_ids',()):
+                    raise NeedsInput(f'Component ID {ref} could not be rebound after topology refresh; select it from the current session state')
+                ref=identity.get('id_map',{}).get(ref,ref)
+            if hasattr(self.host,'resolve_signal'):
+                try:result=self.host.resolve_signal(ref,value['pin'])
+                except ValueError as error:
+                    if 'could not be rebound' in str(error):raise NeedsInput(str(error)) from error
+                    raise
+                if result.get('handles_invalidated'):
+                    if identity is not None:
+                        identity.clear()
+                        identity.update({k:result[k] for k in ('handles_invalidated','handle_generation','id_map','unresolved_ids') if k in result})
+                    self._capture()
+                return result['signal']
             return self.host.call('signalForPin',{'ref':ref,'pin':value['pin']})['signal']
         if set(value)=={'current'}:
             if not self.cache:raise NeedsInput('Circuit state is unavailable; open a native session before resolving current selectors')
-            target=value['current'];cs=self.cache['components']
+            target=value['current']
+            if identity:
+                if target in identity.get('unresolved_ids',()):
+                    raise NeedsInput(f'Component ID {target} could not be rebound after topology refresh; select it from the current session state')
+                target=identity.get('id_map',{}).get(target,target)
+            cs=self.cache['components']
             hits=[c for c in cs if target in (c['id'],c['ref'])]
             if len(hits)!=1:raise NeedsInput('Current selector must identify one component')
             return 'I('+hits[0]['ref']+')'
         raise ValueError('Signal selector requires {ref,pin}, {component_ref,pin}, or {current}')
 
     def _measure(self,raw_path,measurements,criteria):
-        requests=copy.deepcopy(measurements)
+        requests=copy.deepcopy(measurements);identity={}
         for m in requests:
-            m['signal']=self._signal(m['signal'])
-            if m.get('reference') is not None:m['reference']=self._signal(m['reference'])
+            m['signal']=self._signal(m['signal'],identity)
+            if m.get('reference') is not None:m['reference']=self._signal(m['reference'],identity)
         values=measure(parse_raw(Path(raw_path)),requests) if requests else []
         acceptance=verify(values,normalize_criteria(criteria,{m['id'] for m in values})) if criteria else {'passed':True,'criteria':[]}
         result={'raw_path':raw_path,'measurements':values,**acceptance}
@@ -488,9 +508,10 @@ class WorkflowManager:
             return {**native,**checked}
         if kind=='verify':return self._measure(a['raw_path'],a['measurements'],a['criteria'])
         if kind=='decode':
+            identity={}
             for digit in a['digits']:
-                digit['segments']=[self._signal(s) for s in digit['segments']]
-                digit['select']=self._signal(digit['select'])
+                digit['segments']=[self._signal(s,identity) for s in digit['segments']]
+                digit['select']=self._signal(digit['select'],identity)
             result=decode_display(parse_raw(Path(a['raw_path'])),a['digits'],a.get('expected'),**a.get('options',{}))
             if not result['passed']:raise NeedsInput('Display acceptance failed',result)
             return result

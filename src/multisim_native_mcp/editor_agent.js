@@ -660,17 +660,59 @@ function labelWire(args) {
   if(typeof args.name!=='string'||!args.name.trim()||args.name.includes('\0'))throw new Error('Wire net name must not be empty');
   const allWires=wires().wires,w=allWires.find(x=>x.id===args.id);if(!w)throw new Error('Wire does not exist');
   const node=method('SCH_CAP.dll','?GetNode@CIITLinkComp@@','pointer',['pointer'])(ptr(w.id));
-  const network=wireNetworks(allWires),requested=args.name.toLowerCase();
-  for(const other of allWires){
-    if(other.id===w.id||network(other.source.id)===network(w.source.id))continue;
-    const otherNode=method('SCH_CAP.dll','?GetNode@CIITLinkComp@@','pointer',['pointer'])(ptr(other.id));
-    if(!node.isNull()&&!otherNode.isNull()&&node.equals(otherNode))continue;
-    const existing=persistentWireLabel(other.id)?.name||(otherNode.isNull()?null:(nativeWireLabel(other.id).user_named?returnedString('CIRCEXP.dll','?GetLocalName@CiElement@@',otherNode):null));
-    if(existing&&existing.toLowerCase()===requested)
-      throw new Error(`Net name ${JSON.stringify(args.name)} already exists on another net; Multisim requires unique wire net names (connect with a wire, junction, power symbol, or On-Page connector instead).`);
+  const currentTree=treeInstance();
+  const container=method('SchematicCapture.dll','?GetNetContainerFromTreeInstance@CElectricalConnectionBase@@','pointer',['pointer'],'mscdecl')(currentTree);
+  const network=wireNetworks(allWires),wNet=network(w.source.id),requested=args.name.toLowerCase();
+  const isExplicitOrGlobalNet=name=>Boolean(name&&!/^[1-9]\d*$/.test(name));
+  const currentWireSpice=spiceNetName(basePointer(ptr(w.id),'.?AVCSCH_CAPElectricalConnection@@'),true);
+  const sameGlobalRail=name=>Boolean(name&&currentWireSpice&&name.toLowerCase()===currentWireSpice.toLowerCase()&&isExplicitOrGlobalNet(currentWireSpice));
+  const checkSheetConflicts=isCurrentSheet=>{
+    const sheetWires=isCurrentSheet?allWires:wires().wires;
+    for(const other of sheetWires){
+      if(isCurrentSheet&&(other.id===w.id||network(other.source.id)===wNet))continue;
+      const otherNode=method('SCH_CAP.dll','?GetNode@CIITLinkComp@@','pointer',['pointer'])(ptr(other.id));
+      if(!node.isNull()&&!otherNode.isNull()&&node.equals(otherNode))continue;
+      const otherConn=basePointer(ptr(other.id),'.?AVCSCH_CAPElectricalConnection@@');
+      const otherSpice=spiceNetName(otherConn,true);
+      const existing=persistentWireLabel(other.id)?.name
+        ||(otherNode.isNull()?null:(nativeWireLabel(other.id).user_named?returnedString('CIRCEXP.dll','?GetLocalName@CiElement@@',otherNode):null))
+        ||(isExplicitOrGlobalNet(otherSpice)?otherSpice:null);
+      if(existing&&existing.toLowerCase()===requested&&!sameGlobalRail(existing))
+        throw new Error(`Net name ${JSON.stringify(args.name)} already exists on another net; Multisim requires unique wire net names (connect with a wire, junction, power symbol, or On-Page connector instead).`);
+    }
+    for(const c of components().components){
+      const libName=componentLibraryInfo(ciObject(ptr(c.id)))[1]||'';
+      if(!/^(GROUND|VDD|VSS|VCC|VEE|GND|DGND|AGND)$/i.test(libName))continue;
+      const ci=ciObject(ptr(c.id)),count=method('CIRCEXP.dll','?GetPortCount@CiComponent@@','int',['pointer'])(ci);
+      for(let idx=0;idx<count;idx++){
+        const pinObj=c.pins[idx];
+        if(isCurrentSheet&&pinObj&&network(pinObj.id)===wNet)continue;
+        const portNode=method('CIRCEXP.dll','?GetNode@CiComponent@@','pointer',['pointer','int'])(ci,idx);
+        if(!node.isNull()&&!portNode.isNull()&&node.equals(portNode))continue;
+        const port=method('CIRCEXP.dll','?GetPort@CiComponent@@QBEPAVCiPort@@H@Z','pointer',['pointer','int'])(ci,idx);
+        const railName=spiceNetName(port)||(portNode.isNull()?null:returnedString('CIRCEXP.dll','?GetLocalName@CiElement@@',portNode)||null)||(/^GROUND$/i.test(libName)?'0':c.ref);
+        if(railName&&railName.toLowerCase()===requested&&!sameGlobalRail(railName))
+          throw new Error(`Net name ${JSON.stringify(args.name)} already exists on another net; Multisim requires unique wire net names (connect with a wire, junction, power symbol, or On-Page connector instead).`);
+      }
+    }
+  };
+  checkSheetConflicts(true);
+  const allSheets=readSheets();
+  if(allSheets.length>1){
+    const currentSheetId=diagram().sheet.toString(),savedSheetId=selectedSheetId;
+    const currentParent=method('DrwEngine.dll','?GetParent@CTreeInstance@@','pointer',['pointer'])(currentTree);
+    try{
+      for(const sheet of allSheets){
+        if(sheet.id===currentSheetId)continue;
+        selectedSheetId=sheet.id;cachedDiagram=null;
+        const sheetTree=treeInstance();
+        const sheetContainer=method('SchematicCapture.dll','?GetNetContainerFromTreeInstance@CElectricalConnectionBase@@','pointer',['pointer'],'mscdecl')(sheetTree);
+        const sheetParent=method('DrwEngine.dll','?GetParent@CTreeInstance@@','pointer',['pointer'])(sheetTree);
+        if(sheetContainer.equals(container)||(currentParent.isNull()&&sheetParent.isNull()))checkSheetConflicts(false);
+      }
+    }finally{selectedSheetId=savedSheetId;cachedDiagram=null;}
   }
   const connection=basePointer(ptr(w.id),'.?AVCElectricalConnectionBase@@');
-  const container=method('SchematicCapture.dll','?GetNetContainerFromTreeInstance@CElectricalConnectionBase@@','pointer',['pointer'],'mscdecl')(treeInstance());
   const proxy=Memory.alloc(128),pool=Memory.alloc(64);
   method('DrwEngine.dll','??0CTreeInstanceProxy@@QAE@PAVCTreeInstance@@@Z','pointer',['pointer','pointer'])(proxy,treeInstance());
   method('Library.dll','??0CPoolString@@QAE@PB_W@Z','pointer',['pointer','pointer'])(pool,Memory.allocUtf16String(args.name));

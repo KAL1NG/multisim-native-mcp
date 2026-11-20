@@ -62,12 +62,23 @@ def test_native_unique_net_labels_and_immediate_netlist_sync(tmp_path):
         assert 'net_renamed' in nl2['content'].lower() and 'net_alpha' not in nl2['content'].lower()
 
         # Duplicate net name on distinct electrical net rejected cleanly (case-insensitively) without modal deadlock
-        for dup in ('NET_RENAMED', 'net_renamed'):
+        for dup in ('NET_RENAMED', 'net_renamed', '0'):
             wires_now = h.call('wires')['wires']
             w_b_now = next(w for w in wires_now if {w['source'].get('ref'), w['target'].get('ref')} == {'R1', 'R2'})
             with pytest.raises(NativeEditError, match='already exists') as error:
                 h.edit('labelWire', {'id': w_b_now['id'], 'name': dup})
             assert error.value.details['rolled_back']
+
+        # Duplicate net name across flat sibling sheets is also rejected cleanly before save
+        h.edit('createSheet', {'title': 'SiblingSheet'})
+        h.call('selectSheet', {'index': 1})
+        h.edit('place', {'name': 'RESISTOR_VIRTUAL', 'ref': 'R3', 'x': 108, 'y': 180, 'value': 1000})
+        h.edit('place', {'name': 'RESISTOR_VIRTUAL', 'ref': 'R4', 'x': 270, 'y': 180, 'value': 1000})
+        w_s2 = h.edit('wire', {'source': {'ref': 'R3', 'pin': '2'}, 'target': {'ref': 'R4', 'pin': '1'}})
+        with pytest.raises(NativeEditError, match='already exists') as error:
+            h.edit('labelWire', {'id': w_s2['id'], 'name': 'NET_RENAMED'})
+        assert error.value.details['rolled_back']
+        h.call('selectSheet', {'index': 0})
 
         # Save source completes cleanly with zero modal dialog hang
         saved = h.save_source()

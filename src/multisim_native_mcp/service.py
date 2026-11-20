@@ -464,6 +464,8 @@ class EditorService(NativeHost):
             raise ValueError('Provide a nonempty pin name')
         with self.lock:
             identity = self._refresh_signal_names()
+            if component_ref in identity.get('unresolved_ids', ()):
+                raise ValueError(f'Component ID {component_ref} could not be rebound after topology refresh. Use a current ID or a unique reference.')
             ref = identity.get('id_map', {}).get(component_ref, component_ref)
             return {**self.call('signalForPin', {'ref': ref, 'pin': pin}), **identity}
 

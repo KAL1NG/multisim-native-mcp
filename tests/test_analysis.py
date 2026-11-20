@@ -180,3 +180,31 @@ def test_restore_restarts_only_owned_processes_with_numeric_context():
     host.restore(checkpoint)
 
     assert calls == [('restart', checkpoint), ('restoreSnapshot', checkpoint)]
+
+
+def test_resolve_signal_rejects_unresolved_id_and_remaps_rebound_id():
+    host = EditorService()
+    host.topology_dirty = True
+    calls = []
+    host.netlist = lambda: (
+        setattr(host, 'topology_dirty', False)
+        or {
+            'failed': False,
+            'handles_invalidated': True,
+            'handle_generation': 5,
+            'id_map': {'0xold_ok': '0xnew_ok'},
+            'unresolved_ids': ['0xold_gone'],
+        }
+    )
+    host.call = lambda op, args=None: calls.append((op, args)) or {'signal': f"V({args['ref']}_{args['pin']})"}
+
+    with pytest.raises(ValueError, match='could not be rebound'):
+        host.resolve_signal('0xold_gone', '1')
+    assert calls == []
+
+    host.topology_dirty = True
+    resolved = host.resolve_signal('0xold_ok', '2')
+    assert resolved['signal'] == 'V(0xnew_ok_2)'
+    assert resolved['handles_invalidated'] is True
+    assert resolved['handle_generation'] == 5
+    assert calls == [('signalForPin', {'ref': '0xnew_ok', 'pin': '2'})]
