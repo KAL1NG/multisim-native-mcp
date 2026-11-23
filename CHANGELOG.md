@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.4
+
+- Detect installed MCP clients from the Windows installer and register the server in one or more supported clients. Add CLI commands to list clients and install the skill separately.
+- Bundle the Multisim skill with the wheel, sync it during client setup, and expose its guides through MCP resources.
+- Add a 22-component pin and parameter reference and workflow templates for voltage dividers, RC filter analysis, and live display and LED readouts.
+- Rebind component IDs after topology refreshes during waveform measurements and display decoding. Report selectors that can no longer be resolved.
+- Check wire net names for conflicts across sheets in the same electrical scope, including conflicts with global power nets.
+
 ## 0.5.3
 
 - Sweep an independent voltage or current source with `native_run_dc_sweep` and export RAW and CSV results.

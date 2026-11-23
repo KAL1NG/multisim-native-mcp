@@ -4,15 +4,13 @@ English · [简体中文](README.zh-CN.md)
 
 Multisim Native MCP connects an AI assistant to NI Multisim on Windows. Build and edit schematics, run native simulations, and save designs as editable `.ms14` files.
 
-## What's new in v0.5.3
+## What's new in v0.5.4
 
-- **Universal multi-harness install & bundled Agent Skill.** One command installs the 32-bit runtime, verifies the MCP STDIO handshake, registers the server, and automatically syncs the bundled `multisim-native` skill (`SKILL.md` + 22-part cheat sheet + workflow templates) across Antigravity, Codex, Claude Code, Cursor, Windsurf, Gemini CLI, VS Code / GitHub Copilot, OpenCode, DeepSeek Harness, and portable project setups (`.mcp.json` + `.agents/skills/`). The MCP server also exposes the skill docs directly over standard MCP resources (`multisim://skill/SKILL.md`) for harnesses without local skill folders.
-- **DC sweeps and signal tracing.** Sweep an independent voltage or current source, export RAW/CSV data, and trace electrical nets from component pins to waveform vectors.
-- **Waveform measurements and plots.** Measure transient settling time and AC response. Export SVG or PNG waveform and Bode plots, with overlays for traces that share units.
-- **Live circuit indicators.** Read hexadecimal displays, LEDs and digital probes during interactive simulation. Capture a schematic frame when a display shows a selected digit from `0` to `F`.
-- **Schematic editing.** Filter the library by manufacturer or simulation model, set parameters by name, fit drawings to their sheets, and route wires around components.
+- **Automatic client setup.** The Windows installer detects installed MCP clients, registers the server, and syncs the bundled Multisim skill.
+- **Bundled skill and examples.** Look up common component pins and parameters, and adapt workflow templates for voltage dividers, RC filters, and live indicators. Clients can also read the guides through MCP resources.
+- **Signal resolution and net names.** Waveform workflows recover component IDs after topology refreshes, and wire labels are checked for naming conflicts across sheets.
 
-[Release downloads](https://github.com/y-wi/multisim-native-mcp/releases/tag/v0.5.3) · [Changelog](CHANGELOG.md)
+[Release downloads](https://github.com/y-wi/multisim-native-mcp/releases/tag/v0.5.4) · [Changelog](CHANGELOG.md)
 
 ## Install (one command, auto-detects harnesses + installs skill)
 
@@ -27,7 +25,7 @@ Run the installer in PowerShell. By default (`-Client auto`), it installs the ru
 
 ```powershell
 $installer = Join-Path $env:TEMP 'multisim-native-install.ps1'
-Invoke-WebRequest 'https://github.com/y-wi/multisim-native-mcp/releases/download/v0.5.3/install.ps1' -OutFile $installer
+Invoke-WebRequest 'https://github.com/y-wi/multisim-native-mcp/releases/download/v0.5.4/install.ps1' -OutFile $installer
 & $installer
 ```
 

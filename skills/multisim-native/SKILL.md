@@ -4,7 +4,7 @@ description: "Create, edit, wire, simulate, verify and save native NI Multisim (
 license: MIT
 compatibility: "Windows 10/11 with 32-bit NI Multisim 14.3 and the multisim_native MCP server"
 metadata:
-  version: "0.5.3"
+  version: "0.5.4"
 ---
 
 # Multisim Native

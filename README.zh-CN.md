@@ -4,15 +4,13 @@
 
 Multisim Native MCP 将 AI 助手连接到 Windows 上的 NI Multisim。可搭建和修改原理图、运行原生仿真，并将设计保存为可在 Multisim 中继续编辑的 `.ms14` 文件。
 
-## v0.5.3 更新
+## v0.5.4 更新
 
-- **通用多 Harness 自动安装与内置 Agent Skill。** 一条命令即可完成 32 位运行时安装、`doctor --connect` 握手校验、MCP 客户端注册，并自动同步随包内置的 `multisim-native` 技能（含 22 种常用器件引脚/参数速查表与工作流模板），适配 Antigravity、Codex、Claude Code、Claude Desktop、Cursor、Windsurf、Gemini CLI、VS Code / GitHub Copilot、OpenCode、DeepSeek Harness 及跨工具通用工作区标准（`.mcp.json` + `.agents/skills/`）。同时服务端通过标准 MCP Resource（`multisim://skill/SKILL.md` 等）直接暴露技能文档，即使不支持本地 Skill 目录的客户端也能读取。
-- **DC 扫描与信号追踪。** 扫描独立电压源或电流源，导出 RAW/CSV 数据，并从元件引脚查找电气网络和波形向量。
-- **波形测量与绘图。** 测量瞬态稳定时间和交流响应，将波形图或伯德图导出为 SVG 或 PNG。单位相同的曲线可在同一坐标系叠加。
-- **实时显示读数。** 在交互仿真中读取十六进制数码管、LED 和数字探针。可在数码管显示指定字符（`0` 至 `F`）时捕获原理图画面。
-- **原理图编辑。** 按制造商或仿真模型筛选元件库，按名称设置元件参数，调整图纸以容纳电路，并规划绕开元件的走线。
+- **自动配置客户端。** Windows 安装器可检测已安装的 MCP 客户端、注册服务，并同步内置的 Multisim 技能。
+- **内置技能和示例。** 提供常用器件引脚与参数速查，以及分压、RC 滤波和实时显示读数的工作流模板。客户端也可以通过 MCP 资源读取技能文档。
+- **信号解析与网络命名。** 波形工作流在拓扑刷新后重新匹配元件 ID，设置导线网络名时会检查跨图纸命名冲突。
 
-[发行下载](https://github.com/y-wi/multisim-native-mcp/releases/tag/v0.5.3) · [更新日志](CHANGELOG.md)
+[发行下载](https://github.com/y-wi/multisim-native-mcp/releases/tag/v0.5.4) · [更新日志](CHANGELOG.md)
 
 ## 安装（一条命令自动识别 Harness 并安装 Skill）
 
@@ -27,7 +25,7 @@ Multisim Native MCP 将 AI 助手连接到 Windows 上的 NI Multisim。可搭�
 
 ```powershell
 $installer = Join-Path $env:TEMP 'multisim-native-install.ps1'
-Invoke-WebRequest 'https://github.com/y-wi/multisim-native-mcp/releases/download/v0.5.3/install.ps1' -OutFile $installer
+Invoke-WebRequest 'https://github.com/y-wi/multisim-native-mcp/releases/download/v0.5.4/install.ps1' -OutFile $installer
 & $installer
 ```
 

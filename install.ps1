@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Version = '0.5.3',
+    [string]$Version = '0.5.4',
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'MultisimNativeMCP'),
     [string]$Source,
     [ValidateSet('auto','codex','antigravity','claude-code','claude-desktop','cursor','windsurf','gemini-cli','vscode','copilot','opencode','dsh','project','json','none')]
