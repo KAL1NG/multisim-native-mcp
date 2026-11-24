@@ -311,6 +311,8 @@ class WorkflowManager:
 
     def _preflight_edits(self,ops,bindings):
         requests=[];schemas={};issues=[];intra_binds=set()
+        placed_instrument_refs = set()
+        has_generated_instrument_ref = False
         for op in ops:
             if op['operation']=='place':
                 a=op.get('arguments',{});r={k:a.get(k,'') for k in ('name','family','group','manufacturer')}
@@ -365,6 +367,11 @@ class WorkflowManager:
                 except ValueError as error:
                     issues.append({'operation':op.get('bind') or a.get('ref'),'error':str(error)})
                     continue
+                ref = a.get('ref')
+                if isinstance(ref, str) and ref:
+                    placed_instrument_refs.add(ref)
+                else:
+                    has_generated_instrument_ref = True
                 pin_schemas=[{'name':p,'terminal':lbl} for p,lbl in entry['pin_map'].items()]
                 if op.get('bind'):
                     schemas[op['bind']]={'pins':pin_schemas,'instrument_entry':entry,'parameters':[]}
@@ -398,8 +405,11 @@ class WorkflowManager:
                         entry=schemas[alias]['instrument_entry']
                     elif not (reference_roots(target)&intra_binds):
                         try:
-                            info=self.host.call('getInstrumentSettings',{'ref':resolve(target,bindings)})
-                            entry=lookup_by_native(info.get('instrument_manager'),info.get('instrument_type'))
+                            ref = resolve(target, bindings)
+                            # The native sheet cannot resolve references introduced by this edit stage yet.
+                            if not (isinstance(ref, str) and (has_generated_instrument_ref or ref in placed_instrument_refs)):
+                                info = self.host.call('getInstrumentSettings', {'ref': ref})
+                                entry = lookup_by_native(info.get('instrument_manager'), info.get('instrument_type'))
                         except Exception as error:
                             issues.append({'operation':op,'error':str(error)})
                             entry=False

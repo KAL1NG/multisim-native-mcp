@@ -283,6 +283,21 @@ function readInstrumentProperties(sym) {
   }
 }
 
+function refreshCurrentProbeLabel(sink) {
+  method('imeter.dll', '?SetSymbolCompValueString@CIMeterInstrument@@UAEXXZ', 'void', ['pointer'])(sink);
+}
+
+function restoreCurrentProbeLabels() {
+  // Multisim stores the ratio, but clears the derived value text when loading a sheet.
+  for (const sym of listChildren(diagram().composite)) {
+    if (rtti(sym).name !== '.?AVCIITIMeterSymbolComp@@') continue;
+    const label = listChildren(sym).find(child => rtti(child).name === '.?AVCIITSymTextCompValue@@');
+    if (!label || instanceString('Od101dll.dll', '?GetText@CODTextComp@@', label, [treeInstance()], ['pointer'])) continue;
+    const { sink } = getInstrumentSink(sym);
+    if (!sink.isNull()) refreshCurrentProbeLabel(sink);
+  }
+}
+
 function syncInstrumentAfterWrite(sink, writes) {
   const sinkClass = rtti(sink).name;
   // CMultimeterInstrument::SetMeasurementMode updates the SPICE subcircuit shunt/open-circuit impedance.
@@ -300,11 +315,8 @@ function syncInstrumentAfterWrite(sink, writes) {
     if (updDb) {
       new NativeFunction(updDb.address, 'void', ['pointer'], 'thiscall')(sink);
     }
-    if (sinkClass === '.?AVCIMeterInstrument@@') {
-      const setVal = mod.enumerateExports().find(e => e.name.startsWith('?SetSymbolCompValueString@CIMeterInstrument@@'));
-      if (setVal) new NativeFunction(setVal.address, 'void', ['pointer'], 'thiscall')(sink);
-    }
   }
+  if (sinkClass === '.?AVCIMeterInstrument@@') refreshCurrentProbeLabel(sink);
   method('SHARUTIL.dll', '?UpdateDatabase_netlist@CInstrumentBase@@', 'void', ['pointer'])(sink);
   method('SHARUTIL.dll', '?UpdateDatabase_ModelTemplate@CInstrumentBase@@', 'void', ['pointer'])(sink);
   const refreshSlot = instrumentVtableSlot('SHARUTIL.dll', '??_7CInstrumentBase@@6B@', '?refresh_instrument_dialog@CInstrumentBase@@');

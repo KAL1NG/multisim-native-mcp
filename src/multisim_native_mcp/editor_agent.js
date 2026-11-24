@@ -376,11 +376,15 @@ function pageGeometry(graph=diagram().graph) {
   return {width,height,units:'sheet_units',units_per_inch:96,origin:{x:0,y:0},bounds:{left:0,top:0,right:width,bottom:height},
     paper_width:Math.round(values[1].readFloat()*96),paper_height:Math.round(values[0].readFloat()*96)};
 }
+function openedSheetComponents() {
+  if(typeof restoreCurrentProbeLabels==='function')restoreCurrentProbeLabels();
+  return components();
+}
 function selectSheet(args) {
   const sheets=readSheets(),sheet=sheets.find(s=>args.id?s.id===args.id:s.index===args.index);
   if(!sheet)throw new Error('Schematic sheet not found');selectedSheetId=sheet.id;cachedDiagram=null;
   activateSheet();
-  const info=components();return {sheet,path:info.path,component_count:info.components.length};
+  const info=openedSheetComponents();return {sheet,path:info.path,component_count:info.components.length};
 }
 function projects() {
   const p=project(),count=method('DrwEngine.dll','?GetProjectCount@CWorkSpace@@','uint',['pointer'])(p.workspace),result=[];
@@ -389,7 +393,9 @@ function projects() {
 }
 function selectProject(args) {
   if(!projects().projects.some(p=>p.index===args.index))throw new Error('Project index not found');
-  selectedProjectIndex=args.index;selectedSheetId=null;cachedDiagram=null;activateSheet();return inspect();
+  selectedProjectIndex=args.index;selectedSheetId=null;cachedDiagram=null;activateSheet();
+  if(typeof restoreCurrentProbeLabels==='function')restoreCurrentProbeLabels();
+  return inspect();
 }
 function openDocument(args) {
   const value=pathString(args.path);
@@ -452,9 +458,9 @@ function restoreSnapshot(args) {
   const target=projects().projects.find(p=>p.path.toLowerCase()===args.path.toLowerCase());
   if(!target)throw new Error('Restored native project was not found');selectedProjectIndex=target.index;cachedDiagram=null;
   if(args.original_path)setProjectPath(args.original_path);
-  if(args.sheet_index!==undefined)selectSheet({index:args.sheet_index});
+  const count=args.sheet_index!==undefined?selectSheet({index:args.sheet_index}).component_count:openedSheetComponents().components.length;
   if(args.modified)method('DrwEngine.dll','?SetAllModified@CProject@@','void',['pointer','uint8'])(project().proj,1);
-  return {closed,opened,...inspect(),components:components().components.length};
+  return {closed,opened,...inspect(),components:count};
 }
 function masterDb() {
   const h=method('SCH_CAP.dll','?GetComponentHandler@@','pointer',[],'mscdecl')();
@@ -1916,7 +1922,7 @@ const editorHandlers={
     throw new Error('Electrical pin not found: '+c.ref+'.'+args.pin);
   },
   wiringOptions,connectTouching,autoWire:rerouteNativeWire,fitSheet,translateSheet,
-  componentBounds,synchronizeGraphics,circuitState,projectCircuitState,verifySavedCopy,componentLabels,moveLabel:moveComponentLabel,
+  openedSheetComponents,componentBounds,synchronizeGraphics,circuitState,projectCircuitState,verifySavedCopy,componentLabels,moveLabel:moveComponentLabel,
   simulationCommand:args=>({result:method('SpiceifsSch.dll','?ExecuteShellCmd@CSchSpiceSession@SpiceifsSch@@','int',['pointer','pointer'])(simSession(),Memory.allocUtf16String(args.command)),...simulationInfo()}),
   cleanupNumericSession:()=>{
     const info=simulationInfo();

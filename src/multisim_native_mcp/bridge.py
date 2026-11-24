@@ -346,7 +346,7 @@ class NativeHost:
                         info = self.call('inspect')
                         if Path(info['projectPath']).resolve() != self.working.resolve():
                             raise RuntimeError('Isolated process opened an unexpected project')
-                        components = self.call('components')
+                        components = self.call('openedSheetComponents')
                         (folder / 'dao-trace.json').write_text(json.dumps(readiness.exports_sync.report(), indent=2), encoding='utf-8')
                         hwnd = int(self.agent.exports_sync.identity()['hwnd'], 16)
                         if hwnd:
