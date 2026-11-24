@@ -121,7 +121,7 @@ def _wait_process(proc, timeout: float) -> None:
 
 def editor_script():
     return '\n'.join((ROOT / name).read_text(encoding='utf-8') for name in
-                     ('host_agent.js', 'editor_agent.js', 'simulation_settings.js'))
+                     ('host_agent.js', 'editor_agent.js', 'simulation_settings.js', 'instruments_agent.js'))
 
 
 def native_environment() -> dict[str, str]:
